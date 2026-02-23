@@ -285,7 +285,10 @@ impl PartialServerHandle {
                         "Failed to register model '{}': already exists", model_name
                     )));
                 }
-                
+
+                // Signal that the server is ready to accept client connections
+                crate::server::mark_ready();
+
                 Ok::<(), PyErr>(())
             })?;
             
