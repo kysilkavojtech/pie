@@ -42,7 +42,7 @@ static ACCEPT_READY: Notify = Notify::const_new();
 /// Signal that the server is ready to accept client connections.
 /// Call this after model registration is complete.
 pub fn mark_ready() {
-    ACCEPT_READY.notify_waiters();
+    ACCEPT_READY.notify_one();
 }
 
 /// Starts the server service. A daemon task will be spawned to handle the
