@@ -1,0 +1,14 @@
+[package]
+name = "bench-best-of-n"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+inferlet.workspace = true
+inferlet-macros.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true

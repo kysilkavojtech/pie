@@ -1,0 +1,16 @@
+[package]
+name = "bench-best-of-n"
+version = "0.1.0"
+description = "Benchmark: generate N candidates from a shared prefix in parallel, return all for scoring"
+authors = ["Pie Team"]
+
+[runtime]
+core = "^0.2.0"
+mcp = "^0.2.0"
+
+[parameters]
+prompt = {type = "string", description = "The prompt to generate completions for"}
+system = {type = "string", optional = true, description = "System prompt (default: helpful assistant)"}
+max_tokens = {type = "int", optional = true, description = "Max tokens per candidate (default: 256)"}
+num_candidates = {type = "int", optional = true, description = "Number of parallel candidates (default: 4)"}
+temperature = {type = "float", optional = true, description = "Sampling temperature (default: 0.6)"}
