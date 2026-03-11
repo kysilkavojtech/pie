@@ -7,6 +7,7 @@
 //! something impossible with standard chat APIs where a failed generation
 //! means re-sending the entire context.
 
+use inferlet::forward::Forward;
 use inferlet::stop_condition::{ends_with_any, max_len, StopCondition};
 use inferlet::{Args, Context, Result, Sampler};
 use serde_json;
@@ -16,12 +17,14 @@ const DEFAULT_SYSTEM: &str = "\
 You are a JSON assistant. You MUST respond with valid JSON only. \
 No markdown, no explanation, no text outside the JSON object.";
 
+fn make_sampler(temperature: f32) -> Sampler {
+    Sampler::top_p(temperature, 0.95)
+}
+
 /// Simple JSON validation: check that the output parses as valid JSON.
 fn is_valid_json(s: &str) -> bool {
-    // Try to find the JSON object boundaries
     let trimmed = s.trim();
     if let Some(start) = trimmed.find('{') {
-        // Find the matching closing brace
         let candidate = &trimmed[start..];
         serde_json::from_str::<serde_json::Value>(candidate).is_ok()
     } else if let Some(start) = trimmed.find('[') {
@@ -64,7 +67,6 @@ async fn main(mut args: Args) -> Result<String> {
     let checkpoint_token_ids = ctx.get_token_ids().to_vec();
     queue.export_kv_pages(&ctx.kv_pages, "retry_checkpoint");
 
-    let sampler = Sampler::top_p(temperature, 0.95);
     let mut best_output = String::new();
 
     for attempt in 0..=max_retries {
@@ -84,7 +86,7 @@ async fn main(mut args: Args) -> Result<String> {
         }
 
         let stop = max_len(max_tokens).or(ends_with_any(eos_tokens.clone()));
-        let output = ctx.generate(sampler.clone(), stop).await;
+        let output = ctx.generate(make_sampler(temperature), stop).await;
         let attempt_ms = attempt_start.elapsed().as_millis();
         let gen_tokens = ctx.get_token_ids().len() - prefix_tokens;
 

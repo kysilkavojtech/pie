@@ -12,6 +12,10 @@ use inferlet::stop_condition::{ends_with_any, max_len, StopCondition};
 use inferlet::{Args, Result, Sampler};
 use std::time::Instant;
 
+fn make_sampler(temperature: f32) -> Sampler {
+    Sampler::top_p(temperature, 0.95)
+}
+
 #[inferlet::main]
 async fn main(mut args: Args) -> Result<String> {
     let prompt: String = args.value_from_str(["-p", "--prompt"])?;
@@ -41,16 +45,15 @@ async fn main(mut args: Args) -> Result<String> {
 
     // Fork N contexts and generate in parallel
     let gen_start = Instant::now();
-    let sampler = Sampler::top_p(temperature, 0.95);
 
     let handles: Vec<_> = (0..num_candidates)
         .map(|i| {
             let mut ctx = common.fork();
             let eos = eos_tokens.clone();
-            let sampler = sampler.clone();
+            let temp = temperature;
             async move {
                 let stop = max_len(max_tokens).or(ends_with_any(eos));
-                let output = ctx.generate(sampler, stop).await;
+                let output = ctx.generate(make_sampler(temp), stop).await;
                 let tokens = ctx.get_token_ids().len();
                 (i, output, tokens)
             }
