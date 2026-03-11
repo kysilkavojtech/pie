@@ -21,13 +21,14 @@ Usage:
 import argparse
 import asyncio
 import json
-import re
 import sys
 import time
 import tomllib
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+import httpx
 
 from bench_utils import (
     BenchmarkResult,
@@ -173,83 +174,56 @@ async def sglang_completion(
 ) -> tuple[str, float, int]:
     """Send a chat completion to SGLang's OpenAI-compatible API.
 
+    Uses httpx directly — no extra dependencies needed.
     Returns (output, wall_ms, prompt_tokens).
     """
-    try:
-        import openai
-    except ImportError:
-        print("  Error: openai package required for SGLang benchmarks")
-        print("  Run: pip install openai")
-        sys.exit(1)
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
+        start = time.perf_counter()
+        resp = await client.post("/v1/chat/completions", json={
+            "model": "default",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        })
+        wall_ms = (time.perf_counter() - start) * 1000.0
+        resp.raise_for_status()
+        data = resp.json()
 
-    client = openai.AsyncOpenAI(base_url=f"{base_url}/v1", api_key="none")
-
-    start = time.perf_counter()
-    response = await client.chat.completions.create(
-        model="default",
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
-    wall_ms = (time.perf_counter() - start) * 1000.0
-
-    output = response.choices[0].message.content or ""
-    prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+    output = data["choices"][0]["message"]["content"] or ""
+    prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
 
     return output, wall_ms, prompt_tokens
 
 
-async def sglang_completion_streaming(
+async def sglang_chat_multi_turn(
     base_url: str,
-    prompt: str,
-    system: str = SYSTEM_PROMPT,
+    messages: list[dict],
     max_tokens: int = 256,
     temperature: float = 0.0,
-) -> tuple[str, float, float, list[float]]:
-    """Streaming completion for TTFT/ITL measurement.
+) -> tuple[str, float, int]:
+    """Multi-turn chat completion for chain-of-gen.
 
-    Returns (output, wall_ms, ttft_ms, itl_ms_list).
+    Returns (output, wall_ms, prompt_tokens).
     """
-    try:
-        import openai
-    except ImportError:
-        sys.exit(1)
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
+        start = time.perf_counter()
+        resp = await client.post("/v1/chat/completions", json={
+            "model": "default",
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        })
+        wall_ms = (time.perf_counter() - start) * 1000.0
+        resp.raise_for_status()
+        data = resp.json()
 
-    client = openai.AsyncOpenAI(base_url=f"{base_url}/v1", api_key="none")
+    output = data["choices"][0]["message"]["content"] or ""
+    prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
 
-    start = time.perf_counter()
-    ttft = None
-    itl_samples = []
-    output = ""
-    last_time = None
-
-    stream = await client.chat.completions.create(
-        model="default",
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stream=True,
-    )
-
-    async for chunk in stream:
-        now = time.perf_counter()
-        delta = chunk.choices[0].delta.content if chunk.choices else None
-        if delta:
-            if ttft is None:
-                ttft = (now - start) * 1000.0
-            elif last_time is not None:
-                itl_samples.append((now - last_time) * 1000.0)
-            last_time = now
-            output += delta
-
-    wall_ms = (time.perf_counter() - start) * 1000.0
-    return output, wall_ms, ttft or 0.0, itl_samples
+    return output, wall_ms, prompt_tokens
 
 
 # ===========================================================================
@@ -483,40 +457,31 @@ async def tier2a_chain_of_gen(
             run_start = time.perf_counter()
 
             # Step 1: Draft
-            try:
-                import openai
-            except ImportError:
-                break
-
-            client = openai.AsyncOpenAI(base_url=f"{sglang_url}/v1", api_key="none")
-
-            resp1 = await client.chat.completions.create(
-                model="default", messages=messages,
+            draft, _, prefill1 = await sglang_chat_multi_turn(
+                sglang_url, messages,
                 max_tokens=max_tokens_per_step, temperature=0.0,
             )
-            draft = resp1.choices[0].message.content or ""
-            total_prefill += resp1.usage.prompt_tokens if resp1.usage else 0
+            total_prefill += prefill1
 
             # Step 2: Critique (must re-send full history)
             messages.append({"role": "assistant", "content": draft})
             messages.append({"role": "user", "content": critique_prompt_template})
 
-            resp2 = await client.chat.completions.create(
-                model="default", messages=messages,
+            critique, _, prefill2 = await sglang_chat_multi_turn(
+                sglang_url, messages,
                 max_tokens=max_tokens_per_step, temperature=0.0,
             )
-            critique = resp2.choices[0].message.content or ""
-            total_prefill += resp2.usage.prompt_tokens if resp2.usage else 0
+            total_prefill += prefill2
 
             # Step 3: Revise (must re-send even more history)
             messages.append({"role": "assistant", "content": critique})
             messages.append({"role": "user", "content": revise_prompt_template})
 
-            resp3 = await client.chat.completions.create(
-                model="default", messages=messages,
+            _, _, prefill3 = await sglang_chat_multi_turn(
+                sglang_url, messages,
                 max_tokens=max_tokens_per_step, temperature=0.0,
             )
-            total_prefill += resp3.usage.prompt_tokens if resp3.usage else 0
+            total_prefill += prefill3
 
             wall_ms = (time.perf_counter() - run_start) * 1000.0
             sglang_latencies.append(wall_ms)
