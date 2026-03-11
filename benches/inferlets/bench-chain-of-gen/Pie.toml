@@ -1,0 +1,15 @@
+[package]
+name = "bench-chain-of-gen"
+version = "0.1.0"
+description = "Benchmark: chain of 3 sequential generations (draft, critique, revise) with persistent KV cache"
+authors = ["Pie Team"]
+
+[runtime]
+core = "^0.2.0"
+mcp = "^0.2.0"
+
+[parameters]
+prompt = {type = "string", description = "The initial prompt to draft a response for"}
+system = {type = "string", optional = true, description = "System prompt (default: helpful assistant)"}
+max_tokens_per_step = {type = "int", optional = true, description = "Max tokens per generation step (default: 256)"}
+temperature = {type = "float", optional = true, description = "Sampling temperature (default: 0.0)"}

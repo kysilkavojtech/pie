@@ -1,0 +1,16 @@
+[package]
+name = "bench-constrained-retry"
+version = "0.1.0"
+description = "Benchmark: generate JSON with validation, retry from KV cache checkpoint on failure"
+authors = ["Pie Team"]
+
+[runtime]
+core = "^0.2.0"
+mcp = "^0.2.0"
+
+[parameters]
+prompt = {type = "string", description = "Prompt requesting JSON output"}
+system = {type = "string", optional = true, description = "System prompt (default: JSON assistant)"}
+max_tokens = {type = "int", optional = true, description = "Max tokens per attempt (default: 512)"}
+max_retries = {type = "int", optional = true, description = "Max retry attempts (default: 5)"}
+temperature = {type = "float", optional = true, description = "Sampling temperature (default: 0.6)"}

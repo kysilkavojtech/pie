@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "bench-chain-of-gen",
+    "bench-best-of-n",
+    "bench-constrained-retry",
+]
+
+[workspace.dependencies]
+inferlet = { path = "../../sdk/rust/inferlet" }
+inferlet-macros = { path = "../../sdk/rust/inferlet-macros" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+futures = "0.3.31"
+
+[profile.release]
+lto = true
