@@ -46,7 +46,7 @@ async fn main(mut args: Args) -> Result<String> {
     let step1_start = Instant::now();
     ctx.fill_user(&prompt);
     let stop = max_len(max_tokens_per_step).or(ends_with_any(eos_tokens.clone()));
-    let draft = ctx.generate(make_sampler(temperature), stop).await;
+    let _draft = ctx.generate(make_sampler(temperature), stop).await;
     let step1_ms = step1_start.elapsed().as_millis();
     println!("STEP1_MS:{}", step1_ms);
 
@@ -54,7 +54,7 @@ async fn main(mut args: Args) -> Result<String> {
     let step2_start = Instant::now();
     ctx.fill_user(CRITIQUE_PROMPT);
     let stop = max_len(max_tokens_per_step).or(ends_with_any(eos_tokens.clone()));
-    let critique = ctx.generate(make_sampler(temperature), stop).await;
+    let _critique = ctx.generate(make_sampler(temperature), stop).await;
     let step2_ms = step2_start.elapsed().as_millis();
     println!("STEP2_MS:{}", step2_ms);
 
