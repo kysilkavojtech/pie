@@ -11,6 +11,7 @@ import typer
 from . import abort as abort_cmd
 from . import attach as attach_cmd
 from . import config as config_cmd
+from . import install as install_cmd
 from . import list as list_cmd
 from . import ping as ping_cmd
 from . import submit as submit_cmd
@@ -133,6 +134,57 @@ def submit(
             detached=detached,
             link=[expand_path(p) for p in link] if link else None,
             arguments=arguments,
+        )
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+# ============================================================================
+# Install command
+# ============================================================================
+
+
+@app.command()
+def install(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Path to a local .wasm inferlet file"),
+    ],
+    manifest: Annotated[
+        Path,
+        typer.Option(
+            "--manifest",
+            "-m",
+            help="Path to the manifest TOML file",
+        ),
+    ],
+    config: ConfigOption = None,
+    host: HostOption = None,
+    port: PortOption = None,
+    username: UsernameOption = None,
+    private_key_path: PrivateKeyPathOption = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "-f", "--force", help="Force reinstall even if already installed."
+        ),
+    ] = False,
+) -> None:
+    """Install an inferlet to a running Pie engine without launching it.
+
+    Example: pie-client install --path ./my_inferlet.wasm --manifest ./Pie.toml
+    """
+    try:
+        install_cmd.handle_install_command(
+            path=expand_path(path),
+            manifest=expand_path(manifest),
+            config=expand_path(config),
+            host=host,
+            port=port,
+            username=username,
+            private_key_path=expand_path(private_key_path),
+            force=force,
         )
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
