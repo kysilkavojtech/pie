@@ -761,8 +761,11 @@ async def tier2c_constrained_retry(
     #     "You are a JSON assistant. You MUST respond with valid JSON only. "
     #     "No markdown, no explanation, no text outside the JSON object. " * 5
     # )
+    # Use LONG_SYSTEM_PROMPT so the prefill cost is visible (same as 2A/2B),
+    # with JSON instruction appended.
     json_system = (
-        "You are a JSON assistant. You MUST respond with valid JSON only. "
+        LONG_SYSTEM_PROMPT + "\n\n"
+        "IMPORTANT: You are in JSON mode. You MUST respond with valid JSON only. "
         "No markdown, no explanation, no text outside the JSON object."
     )
 
