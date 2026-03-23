@@ -118,7 +118,14 @@ BEST_OF_N_PROMPT = "Write a concise summary of the benefits of renewable energy.
 #     "List 3 famous scientists and their key contributions. "
 #     "Respond as a JSON array of objects with keys: name, field, contribution."
 # )
-CONSTRAINED_PROMPT = 'Respond with a JSON object: {"capital": "<name>"}. What is the capital of France?'
+# Too simple — 0.6B succeeds on first attempt every time:
+# CONSTRAINED_PROMPT = 'Respond with a JSON object: {"capital": "<name>"}. What is the capital of France?'
+# Middle ground — structured enough to sometimes fail at temperature 0.6:
+CONSTRAINED_PROMPT = (
+    "List 5 programming languages. For each, provide the year it was created "
+    "and its primary use case. Respond as a JSON array of objects with keys: "
+    "name, year, use_case. Do not include any other text."
+)
 
 # Context prefix for Tier 2 tests — must be long enough to make prefill cost
 # visible. At ~4 chars/token the target is ~2K tokens (matching benchmarking_plan).
