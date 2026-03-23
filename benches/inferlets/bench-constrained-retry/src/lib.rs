@@ -21,17 +21,43 @@ fn make_sampler(temperature: f32) -> Sampler {
 }
 
 /// Simple JSON validation: check that the output parses as valid JSON.
+/// Extract and validate JSON from model output.
+/// The model may wrap JSON in markdown fences or add trailing text,
+/// so we find the first `{`/`[` and its matching closing bracket.
 fn is_valid_json(s: &str) -> bool {
+    extract_json(s).is_some()
+}
+
+fn extract_json(s: &str) -> Option<&str> {
     let trimmed = s.trim();
-    if let Some(start) = trimmed.find('{') {
-        let candidate = &trimmed[start..];
-        serde_json::from_str::<serde_json::Value>(candidate).is_ok()
+    let (open, close) = if let Some(start) = trimmed.find('{') {
+        (start, '}')
     } else if let Some(start) = trimmed.find('[') {
-        let candidate = &trimmed[start..];
-        serde_json::from_str::<serde_json::Value>(candidate).is_ok()
+        (start, ']')
     } else {
-        serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+        return serde_json::from_str::<serde_json::Value>(trimmed).ok().map(|_| trimmed);
+    };
+
+    // Find the matching closing bracket by counting nesting depth
+    let bytes = trimmed.as_bytes();
+    let open_char = bytes[open];
+    let close_char = close as u8;
+    let mut depth = 0;
+    for i in open..bytes.len() {
+        if bytes[i] == open_char {
+            depth += 1;
+        } else if bytes[i] == close_char {
+            depth -= 1;
+            if depth == 0 {
+                let candidate = &trimmed[open..=i];
+                if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                    return Some(candidate);
+                }
+                break;
+            }
+        }
     }
+    None
 }
 
 #[inferlet::main]

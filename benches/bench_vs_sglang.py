@@ -39,6 +39,39 @@ from bench_utils import (
 )
 from pie_client import PieClient, Event
 
+
+def _extract_json(s: str) -> str | None:
+    """Extract first valid JSON object or array from a string.
+
+    Handles models that wrap JSON in markdown fences or add trailing text.
+    """
+    trimmed = s.strip()
+    for open_char, close_char in [('{', '}'), ('[', ']')]:
+        start = trimmed.find(open_char)
+        if start < 0:
+            continue
+        depth = 0
+        for i in range(start, len(trimmed)):
+            if trimmed[i] == open_char:
+                depth += 1
+            elif trimmed[i] == close_char:
+                depth -= 1
+                if depth == 0:
+                    candidate = trimmed[start:i + 1]
+                    try:
+                        json.loads(candidate)
+                        return candidate
+                    except (json.JSONDecodeError, ValueError):
+                        break
+        break
+    # Fallback: try the whole string
+    try:
+        json.loads(trimmed)
+        return trimmed
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -761,20 +794,12 @@ async def tier2c_constrained_retry(
                 )
                 total_prefill += prompt_tokens
 
-                # Check if valid JSON
-                trimmed = output.strip()
-                try:
-                    for start_char in ['{', '[']:
-                        idx = trimmed.find(start_char)
-                        if idx >= 0:
-                            json.loads(trimmed[idx:])
-                            break
-                    else:
-                        json.loads(trimmed)
+                # Check if valid JSON — extract first {...} or [...] block
+                # (model may add markdown fences or trailing text)
+                if _extract_json(output):
                     break  # Valid JSON, done
-                except (json.JSONDecodeError, ValueError):
-                    if attempt == max_retries:
-                        break  # Give up
+                elif attempt == max_retries:
+                    break  # Give up
 
             wall_ms = (time.perf_counter() - start) * 1000.0
             sglang_latencies.append(wall_ms)
