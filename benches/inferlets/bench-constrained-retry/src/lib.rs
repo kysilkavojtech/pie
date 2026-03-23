@@ -7,9 +7,8 @@
 //! something impossible with standard chat APIs where a failed generation
 //! means re-sending the entire context.
 
-use inferlet::forward::Forward;
 use inferlet::stop_condition::{ends_with_any, max_len, StopCondition};
-use inferlet::{Args, Context, Result, Sampler};
+use inferlet::{Args, Result, Sampler};
 use serde_json;
 use std::time::Instant;
 
@@ -47,9 +46,8 @@ async fn main(mut args: Args) -> Result<String> {
 
     let model = inferlet::get_auto_model();
     let eos_tokens = model.eos_tokens();
-    let queue = model.create_queue();
 
-    // Build the prompt context
+    // Build the prompt context and flush to compute KV cache
     let start = Instant::now();
     let mut ctx = model.create_context();
     ctx.fill_system(&system);
@@ -62,33 +60,22 @@ async fn main(mut args: Args) -> Result<String> {
     let prefix_tokens = ctx.get_token_ids().len();
     println!("PREFIX_TOKENS:{}", prefix_tokens);
 
-    // Save checkpoint: export KV pages so we can restore on retry
-    let checkpoint_kv_page_last_len = ctx.get_kv_page_last_len();
-    let checkpoint_token_ids = ctx.get_token_ids().to_vec();
-    queue.export_kv_pages(&ctx.kv_pages, "retry_checkpoint");
+    // checkpoint is the flushed context — fork() gives copy-on-write KV cache
+    let checkpoint = ctx;
 
     let mut best_output = String::new();
 
     for attempt in 0..=max_retries {
         let attempt_start = Instant::now();
 
-        if attempt > 0 {
-            // Restore from checkpoint — this is the key operation.
-            // Instead of re-prefilling the entire prompt, we import the
-            // cached KV pages and reconstruct the context.
-            let imported_pages = queue.import_kv_pages("retry_checkpoint");
-            ctx = Context::from_imported_state(
-                &model,
-                imported_pages,
-                checkpoint_token_ids.clone(),
-                checkpoint_kv_page_last_len,
-            );
-        }
+        // Fork from checkpoint — shares KV cache pages copy-on-write,
+        // no re-prefill needed. fork() handles the seed-token invariant.
+        let mut attempt_ctx = checkpoint.fork();
 
         let stop = max_len(max_tokens).or(ends_with_any(eos_tokens.clone()));
-        let output = ctx.generate(make_sampler(temperature), stop).await;
+        let output = attempt_ctx.generate(make_sampler(temperature), stop).await;
         let attempt_ms = attempt_start.elapsed().as_millis();
-        let gen_tokens = ctx.get_token_ids().len() - prefix_tokens;
+        let gen_tokens = attempt_ctx.get_token_ids().len() - prefix_tokens;
 
         println!("ATTEMPT_{}_MS:{}", attempt, attempt_ms);
         println!("ATTEMPT_{}_GEN_TOKENS:{}", attempt, gen_tokens);
@@ -108,9 +95,6 @@ async fn main(mut args: Args) -> Result<String> {
             }
         }
     }
-
-    // Clean up exported resources
-    queue.release_exported_kv_pages("retry_checkpoint");
 
     Ok(best_output)
 }
