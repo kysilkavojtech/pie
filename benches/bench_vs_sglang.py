@@ -915,6 +915,15 @@ async def run_benchmarks(args):
                 ["--prompt", "warmup", "--max-tokens", "5", "--temperature", "0"],
             )
             print("  Pie warmup complete.")
+        elif pie_client and pie_inferlets:
+            # Tier 2 only — warm up with the first available inferlet
+            warmup_inferlet = next(iter(pie_inferlets.values()))
+            print("  Warming up Pie (WASM compilation + first inference)...")
+            await pie_run_inferlet(
+                pie_client, warmup_inferlet,
+                ["--prompt", "warmup", "--max-tokens", "5", "--temperature", "0"],
+            )
+            print("  Pie warmup complete.")
         if sglang_url:
             print("  Warming up SGLang...")
             await sglang_completion(sglang_url, "warmup", max_tokens=5, temperature=0.0)
