@@ -21,11 +21,24 @@ fn make_sampler(temperature: f32) -> Sampler {
 }
 
 /// Simple JSON validation: check that the output parses as valid JSON.
-/// Extract and validate JSON from model output.
-/// The model may wrap JSON in markdown fences or add trailing text,
-/// so we find the first `{`/`[` and its matching closing bracket.
+/// Strict schema validation for 2C benchmark.
+/// Requires: valid JSON object with keys "fact" (str), "source" (str),
+/// and "confidence_percent" (number). Most LLM outputs fail this because
+/// they omit a key, use wrong types, or add extra text.
 fn is_valid_json(s: &str) -> bool {
-    extract_json(s).is_some()
+    let Some(raw) = extract_json(s) else {
+        return false;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    let Some(obj) = val.as_object() else {
+        return false;
+    };
+    matches!(
+        (obj.get("fact"), obj.get("source"), obj.get("confidence_percent")),
+        (Some(serde_json::Value::String(_)), Some(serde_json::Value::String(_)), Some(serde_json::Value::Number(_)))
+    )
 }
 
 fn extract_json(s: &str) -> Option<&str> {

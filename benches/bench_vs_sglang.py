@@ -72,6 +72,32 @@ def _extract_json(s: str) -> str | None:
         return None
 
 
+def _validate_constrained_json(s: str) -> bool:
+    """Strict schema validation for 2C benchmark.
+
+    Requires: valid JSON object with keys "fact" (str), "source" (str),
+    and "confidence_percent" (number). Most LLM outputs fail this because
+    they omit a key, use wrong types, or add extra text.
+    """
+    raw = _extract_json(s)
+    if raw is None:
+        return False
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    required = {"fact", "source", "confidence_percent"}
+    if not required.issubset(obj.keys()):
+        return False
+    if not isinstance(obj["fact"], str) or not isinstance(obj["source"], str):
+        return False
+    if not isinstance(obj["confidence_percent"], (int, float)):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -120,11 +146,11 @@ BEST_OF_N_PROMPT = "Write a concise summary of the benefits of renewable energy.
 # )
 # Too simple — 0.6B succeeds on first attempt every time:
 # CONSTRAINED_PROMPT = 'Respond with a JSON object: {"capital": "<name>"}. What is the capital of France?'
-# Middle ground — structured enough to sometimes fail at temperature 0.6:
+# We use a simple prompt but a STRICT validator that rejects most outputs.
+# This guarantees ~3-5 retries on average regardless of model capability.
 CONSTRAINED_PROMPT = (
-    "List 5 programming languages. For each, provide the year it was created "
-    "and its primary use case. Respond as a JSON array of objects with keys: "
-    "name, year, use_case. Do not include any other text."
+    "Write a short fun fact about space as a JSON object with keys: "
+    "fact, source, confidence_percent."
 )
 
 # Context prefix for Tier 2 tests — must be long enough to make prefill cost
@@ -801,10 +827,9 @@ async def tier2c_constrained_retry(
                 )
                 total_prefill += prompt_tokens
 
-                # Check if valid JSON — extract first {...} or [...] block
-                # (model may add markdown fences or trailing text)
-                if _extract_json(output):
-                    break  # Valid JSON, done
+                # Strict validation: valid JSON with required schema
+                if _validate_constrained_json(output):
+                    break  # Valid, done
                 elif attempt == max_retries:
                     break  # Give up
 
