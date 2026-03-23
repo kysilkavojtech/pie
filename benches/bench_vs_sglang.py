@@ -80,10 +80,12 @@ CHAIN_PROMPT = "Explain how garbage collection works in modern programming langu
 BEST_OF_N_PROMPT = "Write a concise summary of the benefits of renewable energy."
 
 # Tier 2C: constrained retry
-CONSTRAINED_PROMPT = (
-    "List 3 famous scientists and their key contributions. "
-    "Respond as a JSON array of objects with keys: name, field, contribution."
-)
+# Original prompt — too complex for small models (0.6B always fails all retries):
+# CONSTRAINED_PROMPT = (
+#     "List 3 famous scientists and their key contributions. "
+#     "Respond as a JSON array of objects with keys: name, field, contribution."
+# )
+CONSTRAINED_PROMPT = 'Respond with a JSON object: {"capital": "<name>"}. What is the capital of France?'
 
 # Context prefix for Tier 2 tests — must be long enough to make prefill cost
 # visible. At ~4 chars/token the target is ~2K tokens (matching benchmarking_plan).
@@ -688,9 +690,14 @@ async def tier2c_constrained_retry(
     """Tier 2C: Constrained JSON generation with retry."""
     results = []
 
+    # Original — repeated 5x, bloated and unhelpful for small models:
+    # json_system = (
+    #     "You are a JSON assistant. You MUST respond with valid JSON only. "
+    #     "No markdown, no explanation, no text outside the JSON object. " * 5
+    # )
     json_system = (
         "You are a JSON assistant. You MUST respond with valid JSON only. "
-        "No markdown, no explanation, no text outside the JSON object. " * 5
+        "No markdown, no explanation, no text outside the JSON object."
     )
 
     # --- Pie: retry from KV cache checkpoint ---
