@@ -216,6 +216,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use smallvec::SmallVec;
+
 use wasmtime::component::types::{ComponentInstance as ComponentInstanceType, ComponentItem, Type};
 use wasmtime::component::{
     Component, Func, Instance, Linker, LinkerInstance, Resource, ResourceAny, ResourceType, Val,
@@ -227,6 +229,34 @@ use super::{InstanceState, RuntimeError};
 /// Proxy marker type for host-defined resources used in dynamic linking.
 /// This is a phantom type used to create host resource handles.
 struct ProxyResource;
+
+/// Precomputed metadata for a forwarded function, consolidating all per-call data
+/// into a single Arc to minimize atomic reference count operations on the hot path.
+struct FuncForwardingInfo {
+    arg_types: Vec<Type>,
+    return_types: Vec<Type>,
+    defined_resource_types: Arc<Vec<ResourceType>>,
+}
+
+/// Check if a type (recursively) contains any resource types (Own or Borrow).
+/// Used at registration time to precompute whether transformation is needed.
+fn type_contains_resource(ty: &Type) -> bool {
+    match ty {
+        Type::Own(_) | Type::Borrow(_) => true,
+        Type::List(lt) => type_contains_resource(&lt.ty()),
+        Type::Record(rt) => rt.fields().any(|f| type_contains_resource(&f.ty)),
+        Type::Tuple(tt) => tt.types().any(|t| type_contains_resource(&t)),
+        Type::Variant(vt) => vt
+            .cases()
+            .any(|c| c.ty.as_ref().map_or(false, type_contains_resource)),
+        Type::Option(ot) => type_contains_resource(&ot.ty()),
+        Type::Result(rt) => {
+            rt.ok().map_or(false, |t| type_contains_resource(&t))
+                || rt.err().map_or(false, |t| type_contains_resource(&t))
+        }
+        _ => false,
+    }
+}
 
 /// Categories of functions in the component model
 enum FuncCategory {
@@ -293,10 +323,10 @@ impl FuncCategory {
 /// track them and end them after the call completes.
 struct TransformedArgs {
     /// The transformed argument values
-    args: Vec<Val>,
+    args: SmallVec<[Val; 8]>,
     /// Borrowed `ResourceAny` handles that need to be dropped after the call completes
     /// to signal that the borrows have ended (cross-component borrows only)
-    borrows_to_end: Vec<ResourceAny>,
+    borrows_to_end: SmallVec<[ResourceAny; 8]>,
 }
 
 /// Transform arguments from caller view to callee view.
@@ -317,8 +347,8 @@ fn transform_args_to_callee_view(
         )));
     }
 
-    let mut borrows_to_end = Vec::new();
-    let mut transformed_args = Vec::with_capacity(args.len());
+    let mut borrows_to_end = SmallVec::new();
+    let mut transformed_args = SmallVec::with_capacity(args.len());
 
     for (val, ty) in args.iter().zip(arg_types.iter()) {
         let transformed = recursive_transform_args_to_callee_view(
@@ -342,10 +372,10 @@ fn transform_args_to_callee_view(
 /// proxy resource handle.
 fn transform_returns_to_caller_view(
     store: &mut StoreContextMut<'_, InstanceState>,
-    returns: Vec<Val>,
+    returns: SmallVec<[Val; 8]>,
     return_type: &[Type],
     callee_defined_resource_types: &[ResourceType],
-) -> Result<Vec<Val>, wasmtime::Error> {
+) -> Result<SmallVec<[Val; 8]>, wasmtime::Error> {
     if returns.len() != return_type.len() {
         return Err(wasmtime::Error::msg(format!(
             "result count mismatch: got {}, expected {}",
@@ -354,7 +384,7 @@ fn transform_returns_to_caller_view(
         )));
     }
 
-    let mut transformed_returns = Vec::with_capacity(returns.len());
+    let mut transformed_returns = SmallVec::with_capacity(returns.len());
     for (val, ty) in returns.into_iter().zip(return_type.iter()) {
         let transformed = recursive_transform_returns_to_caller_view(
             store,
@@ -375,7 +405,7 @@ fn recursive_transform_args_to_callee_view(
     val: Val,
     ty: &Type,
     callee_defined_resource_types: &[ResourceType],
-    borrows_to_end: &mut Vec<ResourceAny>,
+    borrows_to_end: &mut SmallVec<[ResourceAny; 8]>,
 ) -> Result<Val, wasmtime::Error> {
     match ty {
         Type::Borrow(resource_type) => match val {
@@ -853,34 +883,29 @@ async fn forward_call(
     callee_func: &Func,
     args: &[Val],
     returns: &mut [Val],
-    arg_types: &[Type],
-    return_types: &[Type],
-    callee_defined_resource_types: &[ResourceType],
+    info: &FuncForwardingInfo,
 ) -> Result<(), wasmtime::Error> {
-    if returns.len() != return_types.len() {
+    if returns.len() != info.return_types.len() {
         return Err(wasmtime::Error::msg(format!(
             "result slot mismatch: got {}, expected {}",
             returns.len(),
-            return_types.len()
+            info.return_types.len()
         )));
     }
 
-    // Transform arguments and collect any cross-component borrows that need cleanup
     let TransformedArgs {
         args: args_in_callee_view,
         borrows_to_end,
-    } = transform_args_to_callee_view(store, args, arg_types, callee_defined_resource_types)?;
+    } = transform_args_to_callee_view(store, args, &info.arg_types, &info.defined_resource_types)?;
 
-    let mut callee_returns = vec![Val::Bool(false); return_types.len()];
+    let mut callee_returns: SmallVec<[Val; 8]> =
+        smallvec::smallvec![Val::Bool(false); info.return_types.len()];
 
     callee_func
         .call_async(&mut *store, &args_in_callee_view, &mut callee_returns)
         .await?;
     callee_func.post_return_async(&mut *store).await?;
 
-    // End any borrows to the caller by dropping their `ResourceAny` handles.
-    // This signals to the caller that the borrows have completed.
-    // This must happen after the callee function returns but before we return to the caller.
     for borrow in borrows_to_end {
         borrow.resource_drop_async(&mut *store).await?;
     }
@@ -888,8 +913,8 @@ async fn forward_call(
     let returns_in_caller_view = transform_returns_to_caller_view(
         store,
         callee_returns,
-        return_types,
-        callee_defined_resource_types,
+        &info.return_types,
+        &info.defined_resource_types,
     )?;
 
     returns
@@ -993,16 +1018,14 @@ fn register_component_exports(
                     ComponentItem::Resource(rt) => {
                         resource_types_by_name.insert(name.to_string(), rt);
                     }
-                    ComponentItem::ComponentFunc(_) => {
-                        match FuncCategory::from_name(&name) {
-                            FuncCategory::Constructor { resource_name }
-                            | FuncCategory::Method { resource_name }
-                            | FuncCategory::StaticMethod { resource_name } => {
-                                defined_names.insert(resource_name);
-                            }
-                            FuncCategory::FreeFunction => {}
+                    ComponentItem::ComponentFunc(_) => match FuncCategory::from_name(&name) {
+                        FuncCategory::Constructor { resource_name }
+                        | FuncCategory::Method { resource_name }
+                        | FuncCategory::StaticMethod { resource_name } => {
+                            defined_names.insert(resource_name);
                         }
-                    }
+                        FuncCategory::FreeFunction => {}
+                    },
                     _ => {}
                 }
             }
@@ -1147,8 +1170,8 @@ fn register_interface_exports(
                 ))
             })?;
 
-        let arg_types: Arc<Vec<Type>> = Arc::new(func_type.params().map(|(_, ty)| ty).collect());
-        let return_types: Arc<Vec<Type>> = Arc::new(func_type.results().collect());
+        let arg_types: Vec<Type> = func_type.params().map(|(_, ty)| ty).collect();
+        let return_types: Vec<Type> = func_type.results().collect();
 
         register_call_forwarding(
             &mut inst,
@@ -1164,32 +1187,52 @@ fn register_interface_exports(
 }
 
 /// Register a function that forwards calls to the library instance.
+///
+/// For resource-free functions (the common case), registers a minimal closure that
+/// captures only the callee `Func` (which is `Copy`), avoiding Arc overhead and
+/// producing the smallest possible `Box<dyn Future>`. For functions with resource
+/// types in their signature, registers the full forwarding closure with argument
+/// and return value transformation.
 fn register_call_forwarding(
     inst: &mut LinkerInstance<'_, InstanceState>,
     func_name: &str,
     func: Func,
-    arg_types: Arc<Vec<Type>>,
-    return_types: Arc<Vec<Type>>,
+    arg_types: Vec<Type>,
+    return_types: Vec<Type>,
     defined_resource_types: Arc<Vec<ResourceType>>,
 ) -> Result<(), wasmtime::Error> {
-    inst.func_new_async(func_name, move |mut store, _ty, args, returns| {
-        let arg_types = Arc::clone(&arg_types);
-        let return_types = Arc::clone(&return_types);
-        let defined_resource_types = Arc::clone(&defined_resource_types);
+    let has_resource_args = arg_types.iter().any(type_contains_resource);
+    let has_resource_returns = return_types.iter().any(type_contains_resource);
 
-        Box::new(async move {
-            forward_call(
-                &mut store,
-                &func,
-                args,
-                returns,
-                &arg_types,
-                &return_types,
-                &defined_resource_types,
-            )
-            .await
+    if !has_resource_args && !has_resource_returns {
+        // Fast path: the function signature has no resource types, so we can
+        // forward args and returns directly without any transformation. The
+        // closure captures only the callee `Func` (which is `Copy`), avoiding
+        // the Arc overhead and producing a smaller `Box<dyn Future>`.
+        inst.func_new_async(func_name, move |mut store, _ty, args, returns| {
+            Box::new(async move {
+                func.call_async(&mut store, args, returns).await?;
+                func.post_return_async(&mut store).await?;
+                Ok(())
+            })
         })
-    })
+    } else {
+        // Slow path: the function signature involves resource types, so we must
+        // transform arguments from caller view to callee view (and vice versa
+        // for returns). This requires the full `FuncForwardingInfo` metadata,
+        // shared via Arc across invocations.
+        let info = Arc::new(FuncForwardingInfo {
+            arg_types,
+            return_types,
+            defined_resource_types,
+        });
+
+        inst.func_new_async(func_name, move |mut store, _ty, args, returns| {
+            let info = Arc::clone(&info);
+
+            Box::new(async move { forward_call(&mut store, &func, args, returns, &info).await })
+        })
+    }
 }
 
 /// Instantiate library components and register their exports in the linker.

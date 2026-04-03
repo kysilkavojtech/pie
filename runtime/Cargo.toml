@@ -35,7 +35,7 @@ opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = "0.27"
 serde_json = "1.0"
-wasmtime = { version = "41.0.3", features = ["pooling-allocator", "component-model-async"] }
+wasmtime = { version = "41.0.3", features = ["pooling-allocator"] }
 wasmtime-wasi = "41.0.3"
 wasmtime-wasi-http = "41.0.3"
 bytes = "1.10.1"
@@ -71,4 +71,5 @@ ringbuffer = "0.15"
 reqwest = { version = "0.12", features = ["rustls-tls"] }
 crossbeam = { version = "0.8.4", features = ["crossbeam-channel"] }
 bytemuck = { version = "1.21", features = ["derive"] }
+smallvec = "1.13"
 ipc-channel = "0.19"
