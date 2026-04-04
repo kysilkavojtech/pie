@@ -62,6 +62,7 @@ INFERLET_WASMS = {
     "bench-chain-of-gen": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_chain_of_gen.wasm",
     "bench-best-of-n": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_best_of_n.wasm",
     "bench-constrained-retry": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_constrained_retry.wasm",
+    "bench-noop": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_noop.wasm",
 }
 
 INFERLET_MANIFESTS = {
@@ -222,6 +223,161 @@ async def vllm_chat_multi_turn(
     return output, wall_ms, prompt_tokens
 
 
+async def vllm_completion_streaming(
+    base_url: str,
+    prompt: str,
+    system: str = SYSTEM_PROMPT,
+    max_tokens: int = 256,
+    temperature: float = 0.0,
+) -> tuple[str, float, float, int]:
+    """Send a streaming chat completion to vLLM. Measures TTFT.
+
+    Returns (output, wall_ms, ttft_ms, prompt_tokens).
+    """
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
+        start = time.perf_counter()
+        ttft_ms = 0.0
+        output_chunks = []
+        prompt_tokens = 0
+
+        async with client.stream("POST", "/v1/chat/completions", json={
+            "model": "default",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }) as resp:
+            resp.raise_for_status()
+            first_token_seen = False
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[len("data: "):]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                content = delta.get("content", "")
+                if content and not first_token_seen:
+                    ttft_ms = (time.perf_counter() - start) * 1000.0
+                    first_token_seen = True
+                if content:
+                    output_chunks.append(content)
+                # Try to get usage from the final chunk
+                usage = chunk.get("usage")
+                if usage:
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+
+        wall_ms = (time.perf_counter() - start) * 1000.0
+
+    return "".join(output_chunks), wall_ms, ttft_ms, prompt_tokens
+
+
+async def vllm_scrape_metrics(base_url: str) -> dict[str, float]:
+    """Scrape vLLM's Prometheus /metrics endpoint.
+
+    Returns a dict of metric_name -> value for key metrics.
+    Requires vLLM started with metrics enabled (default).
+    """
+    try:
+        async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+            resp = await client.get("/metrics")
+            resp.raise_for_status()
+            text = resp.text
+    except Exception:
+        return {}
+
+    metrics = {}
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        # Parse Prometheus text format: metric_name{labels} value
+        parts = line.split()
+        if len(parts) >= 2:
+            name = parts[0].split("{")[0]
+            try:
+                metrics[name] = float(parts[-1])
+            except ValueError:
+                pass
+    return metrics
+
+
+# ===========================================================================
+# TIER 0: Overhead Isolation
+# ===========================================================================
+
+async def tier0_overhead(
+    pie_client: PieClient | None,
+    pie_inferlets: dict[str, str] | None,
+    vllm_url: str | None,
+    runs: int = 10,
+) -> list[BenchmarkResult]:
+    """Tier 0: Pure framework overhead — no meaningful generation."""
+    results = []
+
+    # --- Pie: noop inferlet in three modes ---
+    if pie_client and pie_inferlets:
+        noop_inferlet = pie_inferlets.get("bench-noop")
+        if noop_inferlet:
+            for mode in ["noop", "flush-only", "one-token"]:
+                latencies = []
+                all_metrics = []
+                for _ in range(runs):
+                    _, wall_ms, metrics, ev = await pie_run_inferlet(
+                        pie_client, noop_inferlet,
+                        ["--mode", mode],
+                    )
+                    if ev == Event.Completed:
+                        latencies.append(wall_ms)
+                        all_metrics.append(metrics)
+
+                stats = latency_stats(latencies)
+                results.append(BenchmarkResult(
+                    name=f"0_overhead_{mode}_pie",
+                    passed=len(latencies) == runs,
+                    duration_sec=sum(latencies) / 1000.0,
+                    details={
+                        "engine": "pie",
+                        "mode": mode,
+                        "runs": runs,
+                        "latency_ms": {k: round(v, 2) for k, v in stats.items()},
+                        "last_inferlet_metrics": all_metrics[-1] if all_metrics else {},
+                    },
+                ))
+                print(f"  0 overhead/{mode} [pie]: p50={stats['p50']:.0f}ms")
+
+    # --- vLLM: max_tokens=1 (minimal generation) ---
+    if vllm_url:
+        latencies = []
+        for _ in range(runs):
+            _, wall_ms, _ = await vllm_completion(
+                vllm_url, "x", max_tokens=1, temperature=0.0,
+            )
+            latencies.append(wall_ms)
+
+        stats = latency_stats(latencies)
+        results.append(BenchmarkResult(
+            name="0_overhead_one_token_vllm",
+            passed=True,
+            duration_sec=sum(latencies) / 1000.0,
+            details={
+                "engine": "vllm",
+                "mode": "one-token",
+                "runs": runs,
+                "latency_ms": {k: round(v, 2) for k, v in stats.items()},
+            },
+        ))
+        print(f"  0 overhead/one-token [vllm]: p50={stats['p50']:.0f}ms")
+
+    return results
+
+
 # ===========================================================================
 # TIER 1: Baseline Serving
 # ===========================================================================
@@ -371,6 +527,82 @@ async def tier1b_throughput_scaling(
                 },
             ))
             print(f"  1b c={level} [{label}]: {throughput_rps:.1f} req/s, p50={stats['p50']:.0f}ms")
+
+    return results
+
+
+async def tier1c_ttft(
+    pie_client: PieClient | None,
+    pie_inferlet: str | None,
+    pie_inferlets: dict[str, str] | None,
+    vllm_url: str | None,
+    runs: int = 5,
+) -> list[BenchmarkResult]:
+    """Tier 1C: Time-to-first-token comparison.
+
+    For Pie: uses the noop inferlet in 'one-token' mode — TTFT includes WASM
+    instantiation + prefill + first decode step.
+    For vLLM: uses streaming mode to measure time to first SSE chunk.
+    """
+    results = []
+    configs = [
+        ("short", "Hello", 128),
+        ("medium", "Explain distributed systems in detail. " * 10, 128),
+        ("long", "Explain distributed systems in detail. " * 100, 256),
+    ]
+
+    for label, prompt, max_tokens in configs:
+        test_name = f"1c_ttft_{label}"
+
+        # --- Pie: use text-completion inferlet, measure wall time for one token ---
+        # (TTFT �� wall time when max_tokens=1 since there's only one decode step)
+        if pie_client and pie_inferlet:
+            latencies = []
+            for _ in range(runs):
+                _, wall_ms, _, ev = await pie_run_inferlet(
+                    pie_client, pie_inferlet,
+                    ["--prompt", prompt, "--max-tokens", "1", "--temperature", "0"],
+                )
+                if ev == Event.Completed:
+                    latencies.append(wall_ms)
+
+            stats = latency_stats(latencies)
+            results.append(BenchmarkResult(
+                name=f"{test_name}_pie",
+                passed=len(latencies) == runs,
+                duration_sec=sum(latencies) / 1000.0,
+                details={
+                    "engine": "pie",
+                    "prompt_label": label,
+                    "runs": runs,
+                    "latency_ms": {k: round(v, 2) for k, v in stats.items()},
+                    "note": "TTFT approximated as wall time with max_tokens=1",
+                },
+            ))
+            print(f"  {test_name} [pie]: p50={stats['p50']:.0f}ms")
+
+        # --- vLLM: streaming mode, measure time to first chunk ---
+        if vllm_url:
+            ttfts = []
+            for _ in range(runs):
+                _, _, ttft_ms, _ = await vllm_completion_streaming(
+                    vllm_url, prompt, max_tokens=max_tokens, temperature=0.0,
+                )
+                ttfts.append(ttft_ms)
+
+            stats = latency_stats(ttfts)
+            results.append(BenchmarkResult(
+                name=f"{test_name}_vllm",
+                passed=True,
+                duration_sec=sum(ttfts) / 1000.0,
+                details={
+                    "engine": "vllm",
+                    "prompt_label": label,
+                    "runs": runs,
+                    "ttft_ms": {k: round(v, 2) for k, v in stats.items()},
+                },
+            ))
+            print(f"  {test_name} [vllm]: p50={stats['p50']:.0f}ms")
 
     return results
 
@@ -718,7 +950,7 @@ async def tier2c_constrained_retry(
 
 async def run_benchmarks(args):
     all_results = []
-    tiers = set(args.tiers.split(",")) if args.tiers else {"1a", "1b", "2a", "2b", "2c"}
+    tiers = set(args.tiers.split(",")) if args.tiers else {"0", "1a", "1b", "1c", "2a", "2b", "2c"}
 
     # --- Connect to Pie ---
     pie_client = None
@@ -731,12 +963,13 @@ async def run_benchmarks(args):
         await pie_client.connect()
         await pie_client.authenticate("benchmark-user")
 
-        if any(t.startswith("1") for t in tiers):
+        if any(t.startswith("1") or t == "0" for t in tiers):
             pie_text_completion = await pie_connect_and_install_inferlet(
                 pie_client, TEXT_COMPLETION_WASM, TEXT_COMPLETION_MANIFEST,
             )
 
-        if any(t.startswith("2") for t in tiers):
+        # Install all benchmark inferlets (needed for Tier 0 noop + Tier 2)
+        if any(t.startswith("2") or t == "0" for t in tiers):
             for name in INFERLET_WASMS:
                 wasm = INFERLET_WASMS[name]
                 manifest = INFERLET_MANIFESTS[name]
@@ -750,8 +983,22 @@ async def run_benchmarks(args):
 
     vllm_url = args.vllm_server if not args.pie_only else None
 
+    # --- Scrape initial vLLM metrics ---
+    vllm_metrics_before = {}
+    if vllm_url and args.vllm_metrics:
+        print("Scraping initial vLLM metrics...")
+        vllm_metrics_before = await vllm_scrape_metrics(vllm_url)
+
     # --- Run tests ---
     try:
+        if "0" in tiers:
+            print("\n--- Tier 0: Overhead Isolation ---")
+            r = await tier0_overhead(
+                pie_client, pie_inferlets, vllm_url,
+                runs=args.runs,
+            )
+            all_results.extend(r)
+
         if "1a" in tiers:
             print("\n--- Tier 1A: Single-Request Latency ---")
             r = await tier1a_single_request(
@@ -765,6 +1012,14 @@ async def run_benchmarks(args):
             r = await tier1b_throughput_scaling(
                 pie_client, pie_text_completion, vllm_url,
                 max_concurrency=args.max_concurrency,
+            )
+            all_results.extend(r)
+
+        if "1c" in tiers:
+            print("\n--- Tier 1C: Time-to-First-Token ---")
+            r = await tier1c_ttft(
+                pie_client, pie_text_completion, pie_inferlets, vllm_url,
+                runs=args.runs,
             )
             all_results.extend(r)
 
@@ -796,6 +1051,27 @@ async def run_benchmarks(args):
         if pie_client:
             await pie_client.close()
 
+    # --- Scrape final vLLM metrics and compute deltas ---
+    if vllm_url and args.vllm_metrics and vllm_metrics_before:
+        print("\n--- vLLM Metrics Delta ---")
+        vllm_metrics_after = await vllm_scrape_metrics(vllm_url)
+        interesting = [
+            "vllm:time_to_first_token_seconds_sum",
+            "vllm:time_to_first_token_seconds_count",
+            "vllm:time_per_output_token_seconds_sum",
+            "vllm:time_per_output_token_seconds_count",
+            "vllm:e2e_request_latency_seconds_sum",
+            "vllm:e2e_request_latency_seconds_count",
+            "vllm:request_queue_time_seconds_sum",
+            "vllm:request_queue_time_seconds_count",
+        ]
+        for key in interesting:
+            before = vllm_metrics_before.get(key, 0)
+            after = vllm_metrics_after.get(key, 0)
+            delta = after - before
+            if delta != 0:
+                print(f"  {key}: {delta:.4f}")
+
     # --- Print comparison tables ---
     print_comparison_summary(all_results)
     print_results(all_results)
@@ -822,7 +1098,7 @@ def print_comparison_summary(results: list[BenchmarkResult]):
     for test_name, engines in sorted(tests.items()):
         print(f"\n  {test_name}:")
         for engine, r in sorted(engines.items()):
-            lat = r.details.get("latency_ms", {})
+            lat = r.details.get("latency_ms", r.details.get("ttft_ms", {}))
             p50 = lat.get("p50", 0)
 
             extra = ""
@@ -854,15 +1130,15 @@ def main():
     )
     parser.add_argument(
         "--tiers", default=None,
-        help="Comma-separated tier list (e.g., 1a,1b,2a,2b,2c). Default: all",
+        help="Comma-separated tier list (e.g., 0,1a,1b,1c,2a,2b,2c). Default: all",
     )
     parser.add_argument(
         "--runs", type=int, default=3,
         help="Number of runs per test (default: 3)",
     )
     parser.add_argument(
-        "--max-concurrency", type=int, default=32,
-        help="Max concurrency for Tier 1B (default: 32)",
+        "--max-concurrency", type=int, default=128,
+        help="Max concurrency for Tier 1B (default: 128)",
     )
     parser.add_argument(
         "--pie-only", action="store_true",
@@ -871,6 +1147,10 @@ def main():
     parser.add_argument(
         "--vllm-only", action="store_true",
         help="Only run vLLM benchmarks (skip Pie)",
+    )
+    parser.add_argument(
+        "--vllm-metrics", action="store_true",
+        help="Scrape vLLM /metrics endpoint for detailed timing breakdown",
     )
     parser.add_argument(
         "--output-json", default=None,

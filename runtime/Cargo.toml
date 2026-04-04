@@ -7,6 +7,9 @@ description = "Programmable Inference Engine (Pie)"
 license = "Apache-2.0"
 repository = "https://github.com/pie-project/pie"
 
+[features]
+ipc-profiling = []
+
 [lib]
 name = "_pie"
 crate-type = ["cdylib", "rlib"]

@@ -4,6 +4,7 @@ members = [
     "bench-chain-of-gen",
     "bench-best-of-n",
     "bench-constrained-retry",
+    "bench-noop",
 ]
 
 [workspace.dependencies]

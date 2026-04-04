@@ -1,0 +1,12 @@
+[package]
+name = "bench-noop"
+version = "0.1.0"
+description = "Benchmark: measures pure WASM instantiation + IPC overhead with minimal GPU work"
+authors = ["Pie Team"]
+
+[runtime]
+core = "^0.2.0"
+mcp = "^0.2.0"
+
+[parameters]
+mode = {type = "string", optional = true, description = "Mode: 'noop' (instant return), 'flush-only' (tokenize+prefill 1 token), 'one-token' (generate 1 token)"}

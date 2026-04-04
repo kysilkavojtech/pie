@@ -1291,12 +1291,19 @@ impl Runtime {
         // Wait for the signal to start
         start_rx.await.unwrap();
 
+        #[cfg(feature = "ipc-profiling")]
+        let _t_start = std::time::Instant::now();
+
         // Wrap everything in a closure returning a Result,
         // so we can capture errors more systematically if desired:
         let result = async {
             let mut store = Store::new(&engine, inst_state);
+            #[cfg(feature = "ipc-profiling")]
+            let _t_store = std::time::Instant::now();
 
             let mut linker = create_linker(&engine, &shared_modules);
+            #[cfg(feature = "ipc-profiling")]
+            let _t_linker = std::time::Instant::now();
 
             // Instantiate dependencies and register their exports in the linker
             dynamic_linking::instantiate_libraries(
@@ -1306,11 +1313,15 @@ impl Runtime {
                 dependency_components,
             )
             .await?;
+            #[cfg(feature = "ipc-profiling")]
+            let _t_deps = std::time::Instant::now();
 
             let instance = linker
                 .instantiate_async(&mut store, &component)
                 .await
                 .map_err(|e| RuntimeError::Other(format!("Instantiation error: {e}")))?;
+            #[cfg(feature = "ipc-profiling")]
+            let _t_instantiate = std::time::Instant::now();
 
             // Attempt to call "run"
             let run_interface = format!("pie:{}/run", program_name);
@@ -1327,8 +1338,33 @@ impl Runtime {
             let run_func = instance
                 .get_typed_func::<(), (Result<(), String>,)>(&mut store, &run_func_export)
                 .map_err(|e| RuntimeError::Other(format!("Failed to get 'run' function: {e}")))?;
+            #[cfg(feature = "ipc-profiling")]
+            let _t_resolve = std::time::Instant::now();
 
-            return match run_func.call_async(&mut store, ()).await {
+            #[cfg(feature = "ipc-profiling")]
+            eprintln!(
+                "[LAUNCH-PROFILE] {{\"store_ms\":{:.1},\"linker_ms\":{:.1},\"deps_ms\":{:.1},\"instantiate_ms\":{:.1},\"resolve_ms\":{:.1},\"total_setup_ms\":{:.1}}}",
+                _t_store.duration_since(_t_start).as_micros() as f64 / 1000.0,
+                _t_linker.duration_since(_t_store).as_micros() as f64 / 1000.0,
+                _t_deps.duration_since(_t_linker).as_micros() as f64 / 1000.0,
+                _t_instantiate.duration_since(_t_deps).as_micros() as f64 / 1000.0,
+                _t_resolve.duration_since(_t_instantiate).as_micros() as f64 / 1000.0,
+                _t_resolve.duration_since(_t_start).as_micros() as f64 / 1000.0,
+            );
+
+            let call_result = run_func.call_async(&mut store, ()).await;
+
+            #[cfg(feature = "ipc-profiling")]
+            {
+                let _t_done = std::time::Instant::now();
+                eprintln!(
+                    "[LAUNCH-PROFILE] {{\"execution_ms\":{:.1},\"total_ms\":{:.1}}}",
+                    _t_done.duration_since(_t_resolve).as_micros() as f64 / 1000.0,
+                    _t_done.duration_since(_t_start).as_micros() as f64 / 1000.0,
+                );
+            }
+
+            return match call_result {
                 Ok((Ok(()),)) => {
                     let return_value = store.data().return_value();
                     //println!("Instance {instance_id} finished normally");
