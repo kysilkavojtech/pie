@@ -339,6 +339,8 @@ async def tier0_overhead(
                     if ev == Event.Completed:
                         latencies.append(wall_ms)
                         all_metrics.append(metrics)
+                    else:
+                        print(f"    [WARN] {mode} run failed: event={ev}, msg={_[:2000]}")
 
                 stats = latency_stats(latencies)
                 results.append(BenchmarkResult(
