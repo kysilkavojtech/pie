@@ -94,6 +94,9 @@ LONG_SYSTEM_PROMPT = (
     "responses logically. You are precise and factual. " * 10  # ~500 tokens
 )
 
+# vLLM model name — auto-detected at runtime via /v1/models, or override with --vllm-model
+VLLM_MODEL_NAME = "default"
+
 
 # ---------------------------------------------------------------------------
 # Pie helpers (shared with SGLang benchmark — TODO: extract to common module)
@@ -177,7 +180,7 @@ async def vllm_completion(
     async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
         start = time.perf_counter()
         resp = await client.post("/v1/chat/completions", json={
-            "model": "default",
+            "model": VLLM_MODEL_NAME,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -208,7 +211,7 @@ async def vllm_chat_multi_turn(
     async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
         start = time.perf_counter()
         resp = await client.post("/v1/chat/completions", json={
-            "model": "default",
+            "model": VLLM_MODEL_NAME,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -241,7 +244,7 @@ async def vllm_completion_streaming(
         prompt_tokens = 0
 
         async with client.stream("POST", "/v1/chat/completions", json={
-            "model": "default",
+            "model": VLLM_MODEL_NAME,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -983,6 +986,23 @@ async def run_benchmarks(args):
 
     vllm_url = args.vllm_server if not args.pie_only else None
 
+    # --- Auto-detect vLLM model name ---
+    global VLLM_MODEL_NAME
+    if args.vllm_model:
+        VLLM_MODEL_NAME = args.vllm_model
+        print(f"vLLM model (override): {VLLM_MODEL_NAME}")
+    elif vllm_url:
+        try:
+            async with httpx.AsyncClient(base_url=vllm_url, timeout=10.0) as client:
+                resp = await client.get("/v1/models")
+                resp.raise_for_status()
+                models = resp.json().get("data", [])
+                if models:
+                    VLLM_MODEL_NAME = models[0]["id"]
+                    print(f"vLLM model: {VLLM_MODEL_NAME}")
+        except Exception as e:
+            print(f"Warning: could not detect vLLM model name ({e}), using '{VLLM_MODEL_NAME}'")
+
     # --- Scrape initial vLLM metrics ---
     vllm_metrics_before = {}
     if vllm_url and args.vllm_metrics:
@@ -1147,6 +1167,10 @@ def main():
     parser.add_argument(
         "--vllm-only", action="store_true",
         help="Only run vLLM benchmarks (skip Pie)",
+    )
+    parser.add_argument(
+        "--vllm-model", default=None,
+        help="Override vLLM model name (auto-detected from /v1/models by default)",
     )
     parser.add_argument(
         "--vllm-metrics", action="store_true",
