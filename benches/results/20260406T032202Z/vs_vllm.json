@@ -1,0 +1,818 @@
+{
+  "timestamp_utc": "2026-04-06T03:29:40.288291+00:00",
+  "benchmarks": [
+    {
+      "name": "0_overhead_noop_pie",
+      "passed": true,
+      "duration_sec": 0.39311034232378006,
+      "details": {
+        "engine": "pie",
+        "mode": "noop",
+        "runs": 5,
+        "latency_ms": {
+          "min": 40.94,
+          "max": 228.41,
+          "mean": 78.62,
+          "p50": 41.03,
+          "p90": 153.74,
+          "p99": 220.95
+        },
+        "last_inferlet_metrics": {
+          "MODE": "noop",
+          "WALL_MS": "0.034"
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "0_overhead_flush-only_pie",
+      "passed": true,
+      "duration_sec": 1.1870428249239922,
+      "details": {
+        "engine": "pie",
+        "mode": "flush-only",
+        "runs": 5,
+        "latency_ms": {
+          "min": 40.92,
+          "max": 1023.14,
+          "mean": 237.41,
+          "p50": 40.96,
+          "p90": 630.32,
+          "p99": 983.85
+        },
+        "last_inferlet_metrics": {
+          "MODE": "flush-only",
+          "GET_MODEL_MS": "0.051",
+          "FILL_MS": "0.33",
+          "FLUSH_MS": "13.973",
+          "WALL_MS": "14.377"
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "0_overhead_one-token_pie",
+      "passed": true,
+      "duration_sec": 0.3129194676876068,
+      "details": {
+        "engine": "pie",
+        "mode": "one-token",
+        "runs": 5,
+        "latency_ms": {
+          "min": 40.96,
+          "max": 146.63,
+          "mean": 62.58,
+          "p50": 41.76,
+          "p90": 104.74,
+          "p99": 142.45
+        },
+        "last_inferlet_metrics": {
+          "MODE": "one-token",
+          "GET_MODEL_MS": "0.069",
+          "PREFILL_MS": "13.747",
+          "DECODE_MS": "14.392",
+          "WALL_MS": "28.221"
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "0_overhead_one_token_vllm",
+      "passed": true,
+      "duration_sec": 0.1283024623990059,
+      "details": {
+        "engine": "vllm",
+        "mode": "one-token",
+        "runs": 5,
+        "latency_ms": {
+          "min": 16.51,
+          "max": 57.41,
+          "mean": 25.66,
+          "p50": 17.49,
+          "p90": 42.47,
+          "p99": 55.92
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1a_latency_128in_128out_pie",
+      "passed": true,
+      "duration_sec": 9.100359708070755,
+      "details": {
+        "engine": "pie",
+        "input_tokens_approx": 128,
+        "output_tokens": 128,
+        "runs": 5,
+        "latency_ms": {
+          "min": 1751.89,
+          "max": 2049.92,
+          "mean": 1820.07,
+          "p50": 1754.76,
+          "p90": 1946.32,
+          "p99": 2039.56
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1a_latency_128in_128out_vllm",
+      "passed": true,
+      "duration_sec": 3.194743297994137,
+      "details": {
+        "engine": "vllm",
+        "input_tokens_approx": 128,
+        "output_tokens": 128,
+        "runs": 5,
+        "latency_ms": {
+          "min": 555.34,
+          "max": 955.46,
+          "mean": 638.95,
+          "p50": 556.13,
+          "p90": 802.22,
+          "p99": 940.13
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1a_latency_512in_128out_pie",
+      "passed": true,
+      "duration_sec": 8.861666336655617,
+      "details": {
+        "engine": "pie",
+        "input_tokens_approx": 512,
+        "output_tokens": 128,
+        "runs": 5,
+        "latency_ms": {
+          "min": 1749.09,
+          "max": 1792.82,
+          "mean": 1772.33,
+          "p50": 1774.49,
+          "p90": 1788.68,
+          "p99": 1792.4
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1a_latency_512in_128out_vllm",
+      "passed": true,
+      "duration_sec": 2.8330790922045708,
+      "details": {
+        "engine": "vllm",
+        "input_tokens_approx": 512,
+        "output_tokens": 128,
+        "runs": 5,
+        "latency_ms": {
+          "min": 565.43,
+          "max": 569.8,
+          "mean": 566.62,
+          "p50": 565.95,
+          "p90": 568.46,
+          "p99": 569.67
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1a_latency_2048in_256out_pie",
+      "passed": true,
+      "duration_sec": 18.686340026557446,
+      "details": {
+        "engine": "pie",
+        "input_tokens_approx": 2048,
+        "output_tokens": 256,
+        "runs": 5,
+        "latency_ms": {
+          "min": 3704.06,
+          "max": 3767.33,
+          "mean": 3737.27,
+          "p50": 3728.54,
+          "p90": 3765.81,
+          "p99": 3767.18
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1a_latency_2048in_256out_vllm",
+      "passed": true,
+      "duration_sec": 6.069233827292919,
+      "details": {
+        "engine": "vllm",
+        "input_tokens_approx": 2048,
+        "output_tokens": 256,
+        "runs": 5,
+        "latency_ms": {
+          "min": 1202.89,
+          "max": 1236.51,
+          "mean": 1213.85,
+          "p50": 1210.33,
+          "p90": 1228.21,
+          "p99": 1235.68
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c1_pie",
+      "passed": true,
+      "duration_sec": 10.906644895672798,
+      "details": {
+        "engine": "pie",
+        "concurrency": 1,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 1.47,
+        "latency_ms": {
+          "min": 671.2,
+          "max": 728.56,
+          "mean": 681.65,
+          "p50": 677.4,
+          "p90": 692.18,
+          "p99": 723.93
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c2_pie",
+      "passed": true,
+      "duration_sec": 5.27685271948576,
+      "details": {
+        "engine": "pie",
+        "concurrency": 2,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 3.03,
+        "latency_ms": {
+          "min": 646.2,
+          "max": 681.99,
+          "mean": 659.58,
+          "p50": 659.0,
+          "p90": 674.09,
+          "p99": 681.99
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c4_pie",
+      "passed": true,
+      "duration_sec": 3.770709775388241,
+      "details": {
+        "engine": "pie",
+        "concurrency": 4,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 4.24,
+        "latency_ms": {
+          "min": 726.22,
+          "max": 1048.15,
+          "mean": 908.78,
+          "p50": 910.73,
+          "p90": 1018.46,
+          "p99": 1045.35
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c8_pie",
+      "passed": true,
+      "duration_sec": 2.2172512114048004,
+      "details": {
+        "engine": "pie",
+        "concurrency": 8,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 7.22,
+        "latency_ms": {
+          "min": 969.48,
+          "max": 1161.49,
+          "mean": 1074.02,
+          "p50": 1079.13,
+          "p90": 1161.08,
+          "p99": 1161.46
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c16_pie",
+      "passed": true,
+      "duration_sec": 1.283134438097477,
+      "details": {
+        "engine": "pie",
+        "concurrency": 16,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 12.47,
+        "latency_ms": {
+          "min": 1112.67,
+          "max": 1281.64,
+          "mean": 1197.93,
+          "p50": 1184.71,
+          "p90": 1267.31,
+          "p99": 1279.51
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c32_pie",
+      "passed": true,
+      "duration_sec": 1.5761718824505806,
+      "details": {
+        "engine": "pie",
+        "concurrency": 32,
+        "requests": 32,
+        "completed": 32,
+        "failures": 0,
+        "throughput_rps": 20.3,
+        "latency_ms": {
+          "min": 1443.03,
+          "max": 1574.89,
+          "mean": 1510.17,
+          "p50": 1516.56,
+          "p90": 1548.67,
+          "p99": 1570.95
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c64_pie",
+      "passed": true,
+      "duration_sec": 2.1743080988526344,
+      "details": {
+        "engine": "pie",
+        "concurrency": 64,
+        "requests": 64,
+        "completed": 64,
+        "failures": 0,
+        "throughput_rps": 29.43,
+        "latency_ms": {
+          "min": 2069.08,
+          "max": 2173.4,
+          "mean": 2140.66,
+          "p50": 2145.55,
+          "p90": 2160.71,
+          "p99": 2172.08
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c128_pie",
+      "passed": true,
+      "duration_sec": 2.4490560591220856,
+      "details": {
+        "engine": "pie",
+        "concurrency": 128,
+        "requests": 128,
+        "completed": 128,
+        "failures": 0,
+        "throughput_rps": 52.27,
+        "latency_ms": {
+          "min": 2327.1,
+          "max": 2437.41,
+          "mean": 2395.13,
+          "p50": 2398.57,
+          "p90": 2427.76,
+          "p99": 2434.25
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c1_vllm",
+      "passed": true,
+      "duration_sec": 4.653341919183731,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 1,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 3.44,
+        "latency_ms": {
+          "min": 236.75,
+          "max": 374.85,
+          "mean": 247.51,
+          "p50": 237.83,
+          "p90": 246.93,
+          "p99": 356.2
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c2_vllm",
+      "passed": true,
+      "duration_sec": 2.724669471383095,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 2,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 5.87,
+        "latency_ms": {
+          "min": 263.69,
+          "max": 463.76,
+          "mean": 310.88,
+          "p50": 291.61,
+          "p90": 379.98,
+          "p99": 463.5
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c4_vllm",
+      "passed": true,
+      "duration_sec": 1.5401377901434898,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 4,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 10.39,
+        "latency_ms": {
+          "min": 282.52,
+          "max": 358.77,
+          "mean": 330.57,
+          "p50": 331.21,
+          "p90": 355.7,
+          "p99": 358.35
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c8_vllm",
+      "passed": true,
+      "duration_sec": 9.428987979888916,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 8,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 1.7,
+        "latency_ms": {
+          "min": 291.5,
+          "max": 8926.82,
+          "mean": 4618.43,
+          "p50": 4617.1,
+          "p90": 8913.44,
+          "p99": 8926.32
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c16_vllm",
+      "passed": true,
+      "duration_sec": 0.6970609351992607,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 16,
+        "requests": 16,
+        "completed": 16,
+        "failures": 0,
+        "throughput_rps": 22.95,
+        "latency_ms": {
+          "min": 314.8,
+          "max": 672.11,
+          "mean": 492.39,
+          "p50": 497.85,
+          "p90": 625.45,
+          "p99": 666.87
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c32_vllm",
+      "passed": true,
+      "duration_sec": 1.1590841636061668,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 32,
+        "requests": 32,
+        "completed": 32,
+        "failures": 0,
+        "throughput_rps": 27.61,
+        "latency_ms": {
+          "min": 383.33,
+          "max": 1128.57,
+          "mean": 750.6,
+          "p50": 750.98,
+          "p90": 1057.96,
+          "p99": 1115.43
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c64_vllm",
+      "passed": true,
+      "duration_sec": 2.1299435421824455,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 64,
+        "requests": 64,
+        "completed": 64,
+        "failures": 0,
+        "throughput_rps": 30.05,
+        "latency_ms": {
+          "min": 568.3,
+          "max": 2100.89,
+          "mean": 1324.31,
+          "p50": 1321.35,
+          "p90": 1943.12,
+          "p99": 2085.72
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1b_throughput_c128_vllm",
+      "passed": true,
+      "duration_sec": 4.032322771847248,
+      "details": {
+        "engine": "vllm",
+        "concurrency": 128,
+        "requests": 128,
+        "completed": 128,
+        "failures": 0,
+        "throughput_rps": 31.74,
+        "latency_ms": {
+          "min": 883.22,
+          "max": 3974.55,
+          "mean": 2405.24,
+          "p50": 2433.44,
+          "p90": 3539.58,
+          "p99": 3956.03
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1c_ttft_short_pie",
+      "passed": true,
+      "duration_sec": 0.1959008127450943,
+      "details": {
+        "engine": "pie",
+        "prompt_label": "short",
+        "runs": 5,
+        "latency_ms": {
+          "min": 31.59,
+          "max": 41.36,
+          "mean": 39.18,
+          "p50": 40.95,
+          "p90": 41.24,
+          "p99": 41.35
+        },
+        "note": "TTFT approximated as wall time with max_tokens=1"
+      },
+      "errors": []
+    },
+    {
+      "name": "1c_ttft_short_vllm",
+      "passed": true,
+      "duration_sec": 0.11598041653633118,
+      "details": {
+        "engine": "vllm",
+        "prompt_label": "short",
+        "runs": 5,
+        "ttft_ms": {
+          "min": 21.03,
+          "max": 29.68,
+          "mean": 23.2,
+          "p50": 21.69,
+          "p90": 26.75,
+          "p99": 29.38
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1c_ttft_medium_pie",
+      "passed": true,
+      "duration_sec": 0.19861868023872375,
+      "details": {
+        "engine": "pie",
+        "prompt_label": "medium",
+        "runs": 5,
+        "latency_ms": {
+          "min": 33.16,
+          "max": 42.04,
+          "mean": 39.72,
+          "p50": 41.01,
+          "p90": 41.8,
+          "p99": 42.01
+        },
+        "note": "TTFT approximated as wall time with max_tokens=1"
+      },
+      "errors": []
+    },
+    {
+      "name": "1c_ttft_medium_vllm",
+      "passed": true,
+      "duration_sec": 0.11292646080255508,
+      "details": {
+        "engine": "vllm",
+        "prompt_label": "medium",
+        "runs": 5,
+        "ttft_ms": {
+          "min": 22.1,
+          "max": 23.1,
+          "mean": 22.59,
+          "p50": 22.55,
+          "p90": 23.04,
+          "p99": 23.09
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "1c_ttft_long_pie",
+      "passed": true,
+      "duration_sec": 0.19967881590127945,
+      "details": {
+        "engine": "pie",
+        "prompt_label": "long",
+        "runs": 5,
+        "latency_ms": {
+          "min": 35.41,
+          "max": 41.27,
+          "mean": 39.94,
+          "p50": 40.99,
+          "p90": 41.17,
+          "p99": 41.26
+        },
+        "note": "TTFT approximated as wall time with max_tokens=1"
+      },
+      "errors": []
+    },
+    {
+      "name": "1c_ttft_long_vllm",
+      "passed": true,
+      "duration_sec": 0.10371535271406174,
+      "details": {
+        "engine": "vllm",
+        "prompt_label": "long",
+        "runs": 5,
+        "ttft_ms": {
+          "min": 18.84,
+          "max": 26.94,
+          "mean": 20.74,
+          "p50": 19.25,
+          "p90": 23.95,
+          "p99": 26.64
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "2a_chain_of_gen_pie",
+      "passed": true,
+      "duration_sec": 53.89452064037323,
+      "details": {
+        "engine": "pie",
+        "runs": 5,
+        "latency_ms": {
+          "min": 10609.09,
+          "max": 11089.64,
+          "mean": 10778.9,
+          "p50": 10716.42,
+          "p90": 10961.08,
+          "p99": 11076.78
+        },
+        "step_ms": {},
+        "prefill_count": 1
+      },
+      "errors": []
+    },
+    {
+      "name": "2a_chain_of_gen_vllm",
+      "passed": true,
+      "duration_sec": 18.187955513596535,
+      "details": {
+        "engine": "vllm",
+        "runs": 5,
+        "latency_ms": {
+          "min": 3622.55,
+          "max": 3670.52,
+          "mean": 3637.59,
+          "p50": 3632.83,
+          "p90": 3657.22,
+          "p99": 3669.19
+        },
+        "avg_total_prefill_tokens": 2404,
+        "prefill_count": 3,
+        "note": "vLLM APC may partially cache shared prefix between calls"
+      },
+      "errors": []
+    },
+    {
+      "name": "2b_best_of_n_pie",
+      "passed": true,
+      "duration_sec": 29.637398347258568,
+      "details": {
+        "engine": "pie",
+        "runs": 5,
+        "num_candidates": 4,
+        "latency_ms": {
+          "min": 5627.96,
+          "max": 6088.96,
+          "mean": 5927.48,
+          "p50": 5941.76,
+          "p90": 6073.21,
+          "p99": 6087.39
+        },
+        "prefill_count": 1
+      },
+      "errors": []
+    },
+    {
+      "name": "2b_best_of_n_vllm",
+      "passed": true,
+      "duration_sec": 7.661805741488934,
+      "details": {
+        "engine": "vllm",
+        "runs": 5,
+        "num_candidates": 4,
+        "latency_ms": {
+          "min": 1507.29,
+          "max": 1550.79,
+          "mean": 1532.36,
+          "p50": 1538.53,
+          "p90": 1548.3,
+          "p99": 1550.54
+        },
+        "avg_total_prefill_tokens": 2060,
+        "prefill_count": 4,
+        "note": "vLLM APC may cache prefix after first request"
+      },
+      "errors": []
+    },
+    {
+      "name": "2c_constrained_retry_pie",
+      "passed": true,
+      "duration_sec": 131.0820264518261,
+      "details": {
+        "engine": "pie",
+        "runs": 5,
+        "latency_ms": {
+          "min": 24583.0,
+          "max": 28035.79,
+          "mean": 26216.41,
+          "p50": 26324.34,
+          "p90": 27415.47,
+          "p99": 27973.75
+        },
+        "avg_attempts": 6.0,
+        "prefill_count": 1
+      },
+      "errors": []
+    },
+    {
+      "name": "2c_constrained_retry_vllm",
+      "passed": true,
+      "duration_sec": 45.270300686359406,
+      "details": {
+        "engine": "vllm",
+        "runs": 5,
+        "latency_ms": {
+          "min": 8405.52,
+          "max": 9836.57,
+          "mean": 9054.06,
+          "p50": 8941.27,
+          "p90": 9624.6,
+          "p99": 9815.37
+        },
+        "avg_attempts": 6.0,
+        "avg_total_prefill_tokens": 1050,
+        "prefill_count_per_attempt": 1,
+        "note": "Each retry re-prefills the full prompt (APC may partially help)"
+      },
+      "errors": []
+    }
+  ],
+  "summary": {
+    "total": 38,
+    "passed": 38,
+    "failed": 0
+  }
+}
