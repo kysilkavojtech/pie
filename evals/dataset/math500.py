@@ -18,7 +18,7 @@ class MATH500(Dataset):
         super().__init__("math500", AnswerType.MATH_EXPRESSION)
 
     def load(self, limit: int | None = None) -> list[Question]:
-        ds = load_dataset("HuggingFaceTB/MATH-500", split="test")
+        ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
         questions: list[Question] = []
         for row in ds:
             questions.append(
