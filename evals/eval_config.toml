@@ -10,7 +10,7 @@ limit = 0                # 0 = all questions, N = first N (quick testing)
 output_dir = "evals/results"
 
 [generation]
-max_tokens = 2048
+max_tokens = 8192         # needs headroom for thinking models (Qwen3, etc.)
 temperature = 0.0        # greedy for reproducibility
 top_p = 1.0
 
