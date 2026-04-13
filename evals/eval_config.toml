@@ -1,0 +1,46 @@
+# Pie Accuracy Evaluation — default config
+#
+# Usage:
+#   python evals/run_evals.py --config evals/eval_config.toml
+#   python evals/run_evals.py --config evals/eval_config.toml --datasets arc_easy --engines vllm --limit 5
+
+[run]
+concurrency = 4          # max concurrent requests per engine
+limit = 0                # 0 = all questions, N = first N (quick testing)
+output_dir = "evals/results"
+
+[generation]
+max_tokens = 2048
+temperature = 0.0        # greedy for reproducibility
+top_p = 1.0
+
+# --- Engines ---
+
+[[engine]]
+name = "pie"
+type = "pie"
+server = "ws://127.0.0.1:8080"
+# wasm_path = "std/text-completion/target/wasm32-wasip2/release/text_completion.wasm"
+# manifest_path = "std/text-completion/Pie.toml"
+
+[[engine]]
+name = "vllm"
+type = "openai"
+base_url = "http://localhost:8000"
+# model_name auto-detected via /v1/models
+
+[[engine]]
+name = "sglang"
+type = "openai"
+base_url = "http://localhost:30000"
+
+# --- Datasets ---
+
+[[dataset]]
+name = "arc_easy"
+
+[[dataset]]
+name = "arc_challenge"
+
+[[dataset]]
+name = "math500"
