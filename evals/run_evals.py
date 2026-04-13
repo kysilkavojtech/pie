@@ -97,7 +97,11 @@ def main() -> None:
     output_path = args.output_json
     if output_path is None:
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        output_path = Path(config.output_dir) / f"eval_{ts}.json"
+        # Resolve output_dir relative to the config file, not CWD
+        output_dir = Path(config.output_dir)
+        if not output_dir.is_absolute():
+            output_dir = args.config.parent / output_dir
+        output_path = output_dir / f"eval_{ts}.json"
     results.save_json(output_path)
 
 
