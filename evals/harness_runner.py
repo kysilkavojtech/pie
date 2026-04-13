@@ -117,15 +117,16 @@ def _build_model_spec(engine_cfg: EngineConfig) -> tuple[str, str]:
 def _extract_accuracy(task_results: dict) -> float:
     """Extract the primary accuracy metric from lm-eval task results.
 
-    lm-eval reports metrics like ``acc,none``, ``acc_norm,none``, ``exact_match,none``.
-    We prefer ``acc_norm`` → ``acc`` → ``exact_match`` in that order.
+    lm-eval reports metrics like ``acc,none``, ``acc_norm,none``, ``exact_match,none``,
+    ``math_verify,none``. We prefer symbolic math verification over string matching,
+    and normalized accuracy over raw accuracy.
     """
-    for key in ("acc_norm,none", "acc,none", "exact_match,none"):
+    for key in ("math_verify,none", "acc_norm,none", "acc,none", "exact_match,none"):
         if key in task_results:
             return task_results[key]
     # Fallback: take the first numeric value that looks like accuracy
     for key, val in task_results.items():
-        if isinstance(val, (int, float)) and 0.0 <= val <= 1.0:
+        if isinstance(val, (int, float)) and 0.0 <= val <= 1.0 and "stderr" not in key:
             return val
     return 0.0
 
@@ -180,10 +181,11 @@ def _convert_samples(
         extracted = _get_filtered_resp(sample)
 
         # 2. Determine correctness — check per-sample metric keys that
-        #    lm-eval may attach (varies by task and version)
+        #    lm-eval attaches. Prefer math_verify (symbolic) over
+        #    exact_match (string comparison).
         correct = None
-        for key in ("exact_match", "acc", "acc_norm",
-                     "exact_match,none", "acc,none", "acc_norm,none"):
+        for key in ("math_verify", "acc_norm", "acc", "exact_match",
+                     "math_verify,none", "acc_norm,none", "acc,none", "exact_match,none"):
             if key in sample:
                 correct = bool(sample[key])
                 break
