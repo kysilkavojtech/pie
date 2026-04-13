@@ -26,16 +26,56 @@ impl AsyncIpcClient {
         T: Serialize,
         R: DeserializeOwned,
     {
+        // D1 IPC sub-bucket profiling. Disabled (compiled out) unless the
+        // ipc-profiling Cargo feature is on. The four checkpoints are:
+        //   t0 -> t1: Rust msgpack serialize
+        //   t1 -> t2: send into ipc-channel + Python work + recv response
+        //             (the "wire + python" bucket; subtract Python's
+        //             [PROFILING] total to get the pipe-transit residual)
+        //   t2 -> t3: Rust msgpack deserialize
+        // See benches/docs/next_benchmark_plan_2026_04_08.md (D1).
+        #[cfg(feature = "ipc-profiling")]
+        let _t0 = std::time::Instant::now();
+
         // Serialize arguments
         let payload = rmp_serde::to_vec_named(args)
             .map_err(|e| anyhow::anyhow!("Failed to serialize args: {}", e))?;
-        
+
+        #[cfg(feature = "ipc-profiling")]
+        let _t1 = std::time::Instant::now();
+        #[cfg(feature = "ipc-profiling")]
+        let _payload_bytes = payload.len();
+
         // Send via IPC
         let response = self.backend.call(method, payload).await?;
-        
+
+        #[cfg(feature = "ipc-profiling")]
+        let _t2 = std::time::Instant::now();
+        #[cfg(feature = "ipc-profiling")]
+        let _response_bytes = response.len();
+
         // Deserialize response
-        rmp_serde::from_slice(&response)
-            .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e))
+        let result = rmp_serde::from_slice(&response)
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize response: {}", e));
+
+        #[cfg(feature = "ipc-profiling")]
+        {
+            let _t3 = std::time::Instant::now();
+            eprintln!(
+                "[IPC-PROFILE] {{\"method\":\"{}\",\"req_bytes\":{},\"resp_bytes\":{},\
+                 \"serialize_ms\":{:.3},\"wire_python_ms\":{:.3},\
+                 \"deserialize_ms\":{:.3},\"total_ms\":{:.3}}}",
+                method,
+                _payload_bytes,
+                _response_bytes,
+                _t1.duration_since(_t0).as_micros() as f64 / 1000.0,
+                _t2.duration_since(_t1).as_micros() as f64 / 1000.0,
+                _t3.duration_since(_t2).as_micros() as f64 / 1000.0,
+                _t3.duration_since(_t0).as_micros() as f64 / 1000.0,
+            );
+        }
+
+        result
     }
     
     /// Fire-and-forget notification.
