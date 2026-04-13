@@ -7,8 +7,10 @@ using direct FFI calls via PyO3.
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
+import time
 
 import msgpack
 
@@ -19,6 +21,17 @@ STATUS_OK = 0
 STATUS_METHOD_NOT_FOUND = 1
 STATUS_INVALID_PARAMS = 2
 STATUS_INTERNAL_ERROR = 3
+
+
+# D1 IPC sub-bucket profiling — Python side. Reuses the same env var as
+# WorkerProfiler so a single PIE_WORKER_PROFILING=1 turns everything on.
+_IPC_PROFILE_ENABLED = os.environ.get("PIE_WORKER_PROFILING", "").strip().lower() not in (
+    "",
+    "0",
+    "false",
+    "no",
+    "off",
+)
 
 
 def poll_ffi_queue(
@@ -55,11 +68,18 @@ def poll_ffi_queue(
             if request is None:
                 continue  # Timeout, try again
 
+            # D1 — capture the moment poll_blocking returned. Anything
+            # before this point is wire transit + ipc-channel internal
+            # deserialization (Rust → Python). Anything after is Python
+            # work attributable to the dispatch loop.
+            t_recv = time.perf_counter() if _IPC_PROFILE_ENABLED else 0.0
+
             request_id, method, payload = request
 
             try:
                 # Unpack args
                 args = msgpack.unpackb(payload)
+                t_unpack = time.perf_counter() if _IPC_PROFILE_ENABLED else 0.0
 
                 # Get handler
                 fn = methods.get(method)
@@ -76,9 +96,28 @@ def poll_ffi_queue(
                 else:
                     result = fn(args)
 
+                t_handler_done = time.perf_counter() if _IPC_PROFILE_ENABLED else 0.0
+
                 # Pack and respond
                 response = msgpack.packb(result)
+                t_pack = time.perf_counter() if _IPC_PROFILE_ENABLED else 0.0
                 ffi_queue.respond(request_id, response)
+                t_respond = time.perf_counter() if _IPC_PROFILE_ENABLED else 0.0
+
+                if _IPC_PROFILE_ENABLED:
+                    # Emit a structured per-call line that pairs with Rust's
+                    # [IPC-PROFILE]. The "handler_ms" here matches the Python
+                    # side of the wire_python_ms bucket on the Rust side.
+                    print(
+                        f"[IPC-PROFILE-PY] method={method} "
+                        f"req_bytes={len(payload)} resp_bytes={len(response)} "
+                        f"unpack_ms={(t_unpack - t_recv) * 1000.0:.3f} "
+                        f"handler_ms={(t_handler_done - t_unpack) * 1000.0:.3f} "
+                        f"pack_ms={(t_pack - t_handler_done) * 1000.0:.3f} "
+                        f"respond_ms={(t_respond - t_pack) * 1000.0:.3f} "
+                        f"total_ms={(t_respond - t_recv) * 1000.0:.3f}",
+                        flush=True,
+                    )
 
             except Exception as e:
                 import traceback

@@ -41,6 +41,7 @@ from . import message
 from . import hf_utils
 from . import telemetry
 
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -48,6 +49,74 @@ from typing import NamedTuple
 
 # Re-export RuntimeConfig for backward compatibility
 __all__ = ["Runtime", "RuntimeConfig"]
+
+
+def _env_bool(name: str) -> bool:
+    """Treat unset, '', '0', 'false', 'no', 'off' as False; everything else True."""
+    v = os.environ.get(name, "")
+    return v.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+# ----------------------------------------------------------------------------
+# Worker profiling helper (PIE_WORKER_PROFILING=1)
+# ----------------------------------------------------------------------------
+#
+# Lightweight stderr profiling for fire_batch(). Tracks per-stage rolling
+# averages and flushes them every PIE_WORKER_PROFILING_FLUSH_SEC seconds
+# (default 10). Output format is one structured line per flush:
+#
+#   [PROFILING] path=local count=N total_ms=X build_batch_ms=Y \
+#       get_inputs_ms=Z inference_ms=W create_resp_ms=V \
+#       ipc_recv_ms=A ipc_resp_ms=B
+#
+# Where ipc_recv_ms / ipc_resp_ms come from D1 IPC sub-bucket profiling
+# (see fire_batch implementation). The path= field distinguishes the local
+# (single-rank or group leader) path from the remote DP step_raw path.
+#
+# This replaces the ad-hoc sed-patched [PROFILING] block from the
+# 2026-04-06 8B run. See benches/docs/pie_fixes_followup.md #3 for history.
+PROFILING_ENABLED = _env_bool("PIE_WORKER_PROFILING")
+try:
+    PROFILING_FLUSH_SEC = float(os.environ.get("PIE_WORKER_PROFILING_FLUSH_SEC", "10"))
+except ValueError:
+    PROFILING_FLUSH_SEC = 10.0
+
+
+class WorkerProfiler:
+    """Rolling-average per-stage timer for fire_batch."""
+
+    def __init__(self):
+        self._counts: dict[str, int] = {}
+        self._sums: dict[str, dict[str, float]] = {}
+        self._last_flush = time.perf_counter()
+
+    def record(self, path: str, **stage_ms: float) -> None:
+        """Record one fire_batch step. stage_ms keys are stage names, values are ms."""
+        if not PROFILING_ENABLED:
+            return
+        sums = self._sums.setdefault(path, {})
+        for stage, ms in stage_ms.items():
+            sums[stage] = sums.get(stage, 0.0) + ms
+        self._counts[path] = self._counts.get(path, 0) + 1
+        self._maybe_flush()
+
+    def _maybe_flush(self) -> None:
+        now = time.perf_counter()
+        if now - self._last_flush < PROFILING_FLUSH_SEC:
+            return
+        self._last_flush = now
+        for path, count in list(self._counts.items()):
+            if count == 0:
+                continue
+            sums = self._sums.get(path, {})
+            parts = [f"path={path}", f"count={count}"]
+            for stage in sorted(sums.keys()):
+                avg = sums[stage] / count
+                parts.append(f"{stage}={avg:.3f}")
+            print("[PROFILING] " + " ".join(parts), flush=True)
+        # Reset window
+        self._counts.clear()
+        self._sums.clear()
 
 
 class StepTiming(NamedTuple):
@@ -191,6 +260,7 @@ class Runtime:
             )
 
         self._latency_stats = LatencyStats(enabled=config.telemetry_enabled)
+        self._worker_profiler = WorkerProfiler()
 
         # Initialize seeds
         self._log(f"Initializing with random seed: {config.random_seed}", "DEBUG")
@@ -310,6 +380,15 @@ class Runtime:
                 self.kv_cache_at_layer = qwen3.create_kv_cache(
                     self.model_config, config
                 )
+
+                # Warmup CUDA graphs (parity with llama3 branch above)
+                # NOTE: this can take ~0.75s × N bins, which on a slow box
+                # may race the Rust IPC handshake accept timeout. If startup
+                # times out, set PIE_WORKER_LAZY_CUDA_WARMUP=1 to defer
+                # warmup to first fire_batch() instead — see lazy_warmup
+                # block in fire_batch() below.
+                if not _env_bool("PIE_WORKER_LAZY_CUDA_WARMUP"):
+                    self.engine.warmup_cuda_graphs(self.kv_cache_at_layer)
 
             case "gptoss":
                 # gpt_oss requires CUDA-only features
@@ -1075,17 +1154,14 @@ class Runtime:
         if target_group_id == self.group_id:
             is_remote_dp_group = False
 
-        # PROFILING: Track request distribution and timings
+        # PROFILING: Track per-group request count for the [PROFILING] flush.
+        # All per-stage timing accounting is handled by self._worker_profiler
+        # (env-gated via PIE_WORKER_PROFILING). The legacy _dp_stats dict is
+        # kept only as a counter for distribution debugging.
         if not hasattr(self, "_dp_stats"):
-            self._dp_stats = {
-                "group_counts": {},
-                "step_raw_times": [],
-                "local_times": [],
-                "last_report": time.perf_counter(),
-            }
-        stats = self._dp_stats
-        stats["group_counts"][target_group_id] = (
-            stats["group_counts"].get(target_group_id, 0) + 1
+            self._dp_stats = {"group_counts": {}}
+        self._dp_stats["group_counts"][target_group_id] = (
+            self._dp_stats["group_counts"].get(target_group_id, 0) + 1
         )
 
         if is_remote_dp_group and self.config.world_size > 1:
@@ -1138,29 +1214,13 @@ class Runtime:
 
             t_total = time.perf_counter() - t_start
 
-            # PROFILING: Track timing per path and report periodically
-            stats["step_raw_times"].append(t_total)
-
-            # Report every 10 seconds
-            now = time.perf_counter()
-            if now - stats["last_report"] > 10.0:
-                stats["last_report"] = now
-                total_reqs = sum(stats["group_counts"].values())
-                avg_raw = sum(stats["step_raw_times"]) / max(
-                    len(stats["step_raw_times"]), 1
-                )
-                avg_local = sum(stats["local_times"]) / max(
-                    len(stats["local_times"]), 1
-                )
-                print(
-                    f"[PROFILING] Groups: {stats['group_counts']} | "
-                    f"Total: {total_reqs} | "
-                    f"STEP_RAW avg: {avg_raw*1000:.1f}ms ({len(stats['step_raw_times'])}) | "
-                    f"Local avg: {avg_local*1000:.1f}ms ({len(stats['local_times'])})"
-                )
-                # Reset for next window
-                stats["step_raw_times"] = []
-                stats["local_times"] = []
+            # PIE_WORKER_PROFILING — record this remote-DP step
+            self._worker_profiler.record(
+                "step_raw",
+                total_ms=t_total * 1000.0,
+                broadcast_ms=t_broadcast * 1000.0,
+                inference_ms=t_inference * 1000.0,
+            )
 
             # Record latency stats
             self._latency_stats.record_span(
@@ -1183,6 +1243,21 @@ class Runtime:
 
         else:
             # LOCAL PATH: Build tensors and execute (or broadcast for TP groups)
+
+            # Lazy CUDA-graph warmup. Workaround for the historical race
+            # between Python warmup_cuda_graphs() (~0.75s × N bins) and the
+            # Rust IPC accept timeout. The proper fix is to extend the
+            # handshake timeout, but until that lands we defer warmup to the
+            # first fire_batch() call (after the handshake has completed).
+            # Toggle with PIE_WORKER_LAZY_CUDA_WARMUP=1 in __init__.
+            if (
+                getattr(self.config, "use_cuda_graphs", False)
+                and not getattr(self, "_cuda_graphs_warmed_up", False)
+                and hasattr(self.engine, "warmup_cuda_graphs")
+            ):
+                self._cuda_graphs_warmed_up = True
+                self.engine.warmup_cuda_graphs(self.kv_cache_at_layer)
+
             t0 = time.perf_counter()
             batch = Batch(
                 kwargs,
@@ -1278,19 +1353,23 @@ class Runtime:
 
         t_total = time.perf_counter() - t_start
 
-        # PROFILING: Track timing per path and report periodically
-        if is_remote_dp_group:
-            stats["step_raw_times"].append(t_total)
-        else:
-            stats["local_times"].append(t_total)
-
-        # Report every 10 seconds (simple summary only)
-        now = time.perf_counter()
-        if now - stats["last_report"] > 10.0:
-            stats["last_report"] = now
-            # Reset for next window
-            stats["step_raw_times"] = []
-            stats["local_times"] = []
+        # PIE_WORKER_PROFILING — record this local fire_batch step
+        # batch_size is included so per-token cost can be derived from totals.
+        try:
+            batch_size = len(results)
+        except Exception:
+            batch_size = 0
+        self._worker_profiler.record(
+            "local",
+            total_ms=t_total * 1000.0,
+            build_batch_ms=t_build_batch * 1000.0,
+            get_inputs_ms=t_get_inputs * 1000.0,
+            sampling_meta_ms=t_get_sampling_meta * 1000.0,
+            broadcast_ms=t_broadcast * 1000.0,
+            inference_ms=t_inference * 1000.0,
+            create_resp_ms=t_create_responses * 1000.0,
+            batch_size=float(batch_size),
+        )
 
         # Record latency stats
         self._latency_stats.record_span(
