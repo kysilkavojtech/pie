@@ -104,12 +104,10 @@ async def _run_question(
 
     if verbose:
         status = "OK" if correct else "WRONG"
-        # Truncate raw output for display, collapse whitespace
-        raw_preview = " ".join(raw_output.split())[:150]
         print(
             f"  [{engine.name}] {question.id}: {status} "
             f"(expected={question.correct_answer}, extracted={extracted})\n"
-            f"    raw: {raw_preview}..."
+            f"    raw: {raw_output}"
         )
 
     return QuestionResult(

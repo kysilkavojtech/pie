@@ -53,11 +53,25 @@ class MATH500(Dataset):
 
         reward = accuracy_reward(raw_output, question.correct_answer)
         if reward is None:
-            # Gold solution unparseable — skip (count as incorrect)
             return False, ""
         correct = reward >= 1.0
-        # Show the boxed answer if present, otherwise first 200 chars
-        import re
-        boxed = re.search(r"\\boxed\{([^}]*)\}", answer_text)
-        extracted = boxed.group(0) if boxed else answer_text[:200]
+        # Extract \boxed{...} with nested brace support for display
+        extracted = _extract_boxed(answer_text) or answer_text[:200]
         return correct, extracted
+
+
+def _extract_boxed(text: str) -> str | None:
+    """Extract \\boxed{...} content, handling nested braces."""
+    start = text.find("\\boxed{")
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start + len("\\boxed{"), len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            if depth == 0:
+                return text[start:i + 1]
+            depth -= 1
+    # Unclosed boxed (truncated output)
+    return text[start:start + 200] + "..."
