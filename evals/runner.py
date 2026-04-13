@@ -78,9 +78,12 @@ async def _run_question(
     params: GenerationParams,
     semaphore: asyncio.Semaphore,
     verbose: bool = False,
+    no_think: bool = False,
 ) -> QuestionResult:
     """Run a single question through an engine and evaluate."""
     prompt = dataset.format_prompt(question)
+    if no_think:
+        prompt += "\n/no_think"
     async with semaphore:
         start = time.perf_counter()
         try:
@@ -126,6 +129,7 @@ async def run_eval(
     dataset_filter: list[str] | None = None,
     limit_override: int | None = None,
     verbose: bool = False,
+    no_think: bool = False,
 ) -> EvalResults:
     """Run the full evaluation and return results."""
     limit = limit_override if limit_override is not None else config.limit
@@ -180,7 +184,7 @@ async def run_eval(
 
             sem = asyncio.Semaphore(config.concurrency)
             tasks = [
-                _run_question(eng, ds, q, config.generation, sem, verbose)
+                _run_question(eng, ds, q, config.generation, sem, verbose, no_think)
                 for q in questions
             ]
             question_results = await asyncio.gather(*tasks)
