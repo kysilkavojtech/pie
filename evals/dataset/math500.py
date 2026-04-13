@@ -45,11 +45,19 @@ class MATH500(Dataset):
         )
 
     def evaluate(self, question: Question, raw_output: str) -> tuple[bool, str]:
+        from ..extract.math_verify_utils import strip_thinking
+        # Strip thinking blocks first for the extracted display
+        answer_text = strip_thinking(raw_output)
+        if not answer_text:
+            return False, "<truncated in thinking>"
+
         reward = accuracy_reward(raw_output, question.correct_answer)
         if reward is None:
             # Gold solution unparseable — skip (count as incorrect)
             return False, ""
         correct = reward >= 1.0
-        # Extract what we can for logging
-        extracted = raw_output.strip()[:200]
+        # Show the boxed answer if present, otherwise first 200 chars
+        import re
+        boxed = re.search(r"\\boxed\{([^}]*)\}", answer_text)
+        extracted = boxed.group(0) if boxed else answer_text[:200]
         return correct, extracted
