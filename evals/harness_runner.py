@@ -29,6 +29,9 @@ TASK_NAME_MAP: dict[str, str] = {
     "math500": "minerva_math500",    # generate_until — all engines
 }
 
+# Tasks that require loglikelihood (not supported by Pie)
+_LOGLIKELIHOOD_TASKS: set[str] = {"arc_easy", "arc_challenge"}
+
 # Reverse map for result conversion
 _TASK_NAME_REVERSE: dict[str, str] = {v: k for k, v in TASK_NAME_MAP.items()}
 
@@ -127,14 +130,43 @@ def _extract_accuracy(task_results: dict) -> float:
     return 0.0
 
 
+def _get_filtered_resp(sample: dict) -> str:
+    """Extract the filtered (post-extraction) response from an lm-eval sample.
+
+    ``filtered_resps`` can be:
+      - a list of strings: ``["9"]``
+      - a dict keyed by filter name: ``{"flexible-extract": ["9"]}``
+    """
+    filtered = sample.get("filtered_resps")
+    if filtered is None:
+        return ""
+    if isinstance(filtered, dict):
+        # Take the first filter's result
+        for val in filtered.values():
+            if isinstance(val, list) and val:
+                return str(val[0])
+            return str(val)
+    if isinstance(filtered, list) and filtered:
+        return str(filtered[0])
+    return str(filtered)
+
+
 def _convert_samples(
     lm_task: str,
     samples: list[dict],
     engine_name: str,
+    verbose: bool = False,
 ) -> DatasetResult:
     """Convert lm-eval per-sample results to our DatasetResult format."""
     our_name = _our_name(lm_task)
     question_results = []
+
+    # Debug: print keys of the first sample so we can see what lm-eval returns
+    if samples and verbose:
+        s = samples[0]
+        print(f"  [debug] sample keys: {list(s.keys())}")
+        print(f"  [debug] filtered_resps type={type(s.get('filtered_resps'))}, "
+              f"value={repr(s.get('filtered_resps'))[:200]}")
 
     for sample in samples:
         doc_id = sample.get("doc_id", len(question_results))
@@ -144,17 +176,24 @@ def _convert_samples(
         resps = sample.get("resps", [[]])
         raw_output = resps[0][0] if resps and resps[0] else ""
 
-        # Extract correctness from metrics if available
-        correct = False
-        extracted = ""
-        if "acc" in sample:
-            correct = bool(sample["acc"])
-        elif "exact_match" in sample:
-            correct = bool(sample["exact_match"])
-        elif "filtered_resps" in sample:
-            filtered = sample["filtered_resps"]
-            extracted = filtered[0] if filtered else ""
+        # 1. Get the filtered/extracted answer from lm-eval's post-processing
+        extracted = _get_filtered_resp(sample)
+
+        # 2. Determine correctness — check per-sample metric keys that
+        #    lm-eval may attach (varies by task and version)
+        correct = None
+        for key in ("exact_match", "acc", "acc_norm",
+                     "exact_match,none", "acc,none", "acc_norm,none"):
+            if key in sample:
+                correct = bool(sample[key])
+                break
+
+        # 3. Fallback: compare extracted answer to target
+        if correct is None and extracted:
             correct = extracted.strip() == target.strip()
+
+        if correct is None:
+            correct = False
 
         if not extracted:
             extracted = str(raw_output)[:200]
@@ -243,13 +282,27 @@ def run_harness_eval(
 
     for engine_cfg in engine_cfgs:
         model_type, model_args = _build_model_spec(engine_cfg)
+
+        # Filter out loglikelihood tasks for Pie (only supports generate_until)
+        engine_tasks = lm_tasks
+        if engine_cfg.type == "pie":
+            skipped = [t for t in lm_tasks if _our_name(t) in _LOGLIKELIHOOD_TASKS]
+            engine_tasks = [t for t in lm_tasks if _our_name(t) not in _LOGLIKELIHOOD_TASKS]
+            if skipped:
+                skipped_names = [_our_name(t) for t in skipped]
+                print(f"\n  Skipping {skipped_names} for {engine_cfg.name} "
+                      f"(loglikelihood tasks not supported — use --backend custom)")
+            if not engine_tasks:
+                print(f"  No compatible tasks for {engine_cfg.name}, skipping.")
+                continue
+
         print(f"\nRunning lm-eval: engine={engine_cfg.name} ({model_type}), "
-              f"tasks={lm_tasks}, limit={limit}")
+              f"tasks={engine_tasks}, limit={limit}")
 
         lm_results = lm_eval.simple_evaluate(
             model=model_type,
             model_args=model_args,
-            tasks=lm_tasks,
+            tasks=engine_tasks,
             num_fewshot=num_fewshot,
             batch_size=1,  # API models process one request at a time (concurrency handled internally)
             limit=limit,
@@ -262,17 +315,20 @@ def run_harness_eval(
         task_results = lm_results.get("results", {})
         task_samples = lm_results.get("samples", {})
 
-        for lm_task in lm_tasks:
+        for lm_task in engine_tasks:
             our_name = _our_name(lm_task)
 
             if lm_task in task_results:
                 acc = _extract_accuracy(task_results[lm_task])
-                print(f"  → {our_name}/{engine_cfg.name}: {acc * 100:.1f}%")
+                print(f"  → {our_name}/{engine_cfg.name}: {acc * 100:.1f}% (lm-eval)")
+                if verbose:
+                    print(f"  [debug] task-level metrics: {task_results[lm_task]}")
 
             # Convert per-sample results if available
             if lm_task in task_samples:
                 dr = _convert_samples(
-                    lm_task, task_samples[lm_task], engine_cfg.name
+                    lm_task, task_samples[lm_task], engine_cfg.name,
+                    verbose=verbose,
                 )
                 results.dataset_results.append(dr)
             elif lm_task in task_results:

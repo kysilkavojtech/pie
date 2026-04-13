@@ -7,7 +7,7 @@
 [run]
 concurrency = 4          # max concurrent requests per engine
 limit = 0                # 0 = all questions, N = first N (quick testing)
-output_dir = "evals/results"
+output_dir = "results"
 
 [generation]
 max_tokens = 8192         # needs headroom for thinking models (Qwen3, etc.)
