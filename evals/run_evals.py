@@ -51,6 +51,10 @@ def main() -> None:
         "--verbose", "-v", action="store_true",
         help="Print per-question results as they complete",
     )
+    parser.add_argument(
+        "--no-think", action="store_true",
+        help="Append /no_think to prompts (disables thinking mode on Qwen3, etc.)",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -68,6 +72,7 @@ def main() -> None:
             dataset_filter=dataset_filter,
             limit_override=args.limit,
             verbose=args.verbose,
+            no_think=args.no_think,
         )
     )
 
