@@ -1,8 +1,8 @@
 """Benchmark: Pie vs SGLang Head-to-Head
 
-Compares Pie and SGLang across Tier 1 (baseline serving) and Tier 2
-(multi-step workflows) benchmarks. Measures wall time, throughput,
-TTFT, and total prefill tokens.
+Compares Pie and SGLang across Tier 0 (framework overhead), Tier 1
+(baseline serving), and Tier 2 (multi-step workflows) benchmarks.
+Measures wall time, throughput, TTFT, and total prefill tokens.
 
 Prerequisites:
     - Pie server running (default: ws://127.0.0.1:8080)
@@ -12,10 +12,10 @@ Prerequisites:
 
 Usage:
     python benches/bench_vs_sglang.py
-    python benches/bench_vs_sglang.py --tiers 1        # Tier 1 only
-    python benches/bench_vs_sglang.py --tiers 2a,2b    # Specific tests
-    python benches/bench_vs_sglang.py --pie-only        # Skip SGLang
-    python benches/bench_vs_sglang.py --sglang-only     # Skip Pie
+    python benches/bench_vs_sglang.py --tiers 0,1a,1b      # Tier 0 + 1 only
+    python benches/bench_vs_sglang.py --tiers 2a,2b        # Specific tests
+    python benches/bench_vs_sglang.py --pie-only           # Skip SGLang
+    python benches/bench_vs_sglang.py --sglang-only        # Skip Pie
 """
 
 import argparse
@@ -112,11 +112,12 @@ TEXT_COMPLETION_WASM = (
 )
 TEXT_COMPLETION_MANIFEST = REPO_ROOT / "std" / "text-completion" / "Pie.toml"
 
-# Benchmark inferlets (for Tier 2)
+# Benchmark inferlets (for Tier 0 and Tier 2)
 INFERLET_WASMS = {
     "bench-chain-of-gen": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_chain_of_gen.wasm",
     "bench-best-of-n": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_best_of_n.wasm",
     "bench-constrained-retry": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_constrained_retry.wasm",
+    "bench-noop": INFERLETS_DIR / "target" / "wasm32-wasip2" / "release" / "bench_noop.wasm",
 }
 
 INFERLET_MANIFESTS = {
@@ -367,6 +368,139 @@ async def sglang_chat_multi_turn(
     return output, wall_ms, prompt_tokens
 
 
+async def sglang_completion_streaming(
+    base_url: str,
+    prompt: str,
+    system: str = SYSTEM_PROMPT,
+    max_tokens: int = 256,
+    temperature: float = 0.0,
+) -> tuple[str, float, float, int]:
+    """Send a streaming chat completion to SGLang. Measures TTFT.
+
+    Returns (output, wall_ms, ttft_ms, prompt_tokens).
+    """
+    async with httpx.AsyncClient(base_url=base_url, timeout=120.0) as client:
+        start = time.perf_counter()
+        ttft_ms = 0.0
+        output_chunks = []
+        prompt_tokens = 0
+
+        async with client.stream("POST", "/v1/chat/completions", json={
+            "model": "default",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }) as resp:
+            resp.raise_for_status()
+            first_token_seen = False
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[len("data: "):]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                content = delta.get("content", "")
+                if content and not first_token_seen:
+                    ttft_ms = (time.perf_counter() - start) * 1000.0
+                    first_token_seen = True
+                if content:
+                    output_chunks.append(content)
+                usage = chunk.get("usage")
+                if usage:
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+
+        wall_ms = (time.perf_counter() - start) * 1000.0
+
+    return "".join(output_chunks), wall_ms, ttft_ms, prompt_tokens
+
+
+# ===========================================================================
+# TIER 0: Overhead Isolation
+# ===========================================================================
+
+async def tier0_overhead(
+    pie_client: PieClient | None,
+    pie_inferlets: dict[str, str] | None,
+    sglang_url: str | None,
+    runs: int = 10,
+) -> list[BenchmarkResult]:
+    """Tier 0: Pure framework overhead — no meaningful generation.
+
+    Pie runs the bench-noop inferlet in three modes (noop, flush-only,
+    one-token) to isolate WASM instantiation, IPC round-trip, and one
+    decode step respectively. SGLang runs max_tokens=1 as the parallel
+    minimum-work measurement.
+    """
+    results = []
+
+    # --- Pie: noop inferlet in three modes ---
+    if pie_client and pie_inferlets:
+        noop_inferlet = pie_inferlets.get("bench-noop")
+        if noop_inferlet:
+            for mode in ["noop", "flush-only", "one-token"]:
+                latencies = []
+                all_metrics = []
+                for _ in range(runs):
+                    _, wall_ms, metrics, ev = await pie_run_inferlet(
+                        pie_client, noop_inferlet,
+                        ["--mode", mode],
+                    )
+                    if ev == Event.Completed:
+                        latencies.append(wall_ms)
+                        all_metrics.append(metrics)
+                    else:
+                        print(f"    [WARN] {mode} run failed: event={ev}")
+
+                stats = latency_stats(latencies)
+                results.append(BenchmarkResult(
+                    name=f"0_overhead_{mode}_pie",
+                    passed=len(latencies) == runs,
+                    duration_sec=sum(latencies) / 1000.0,
+                    details={
+                        "engine": "pie",
+                        "mode": mode,
+                        "runs": runs,
+                        "latency_ms": {k: round(v, 2) for k, v in stats.items()},
+                        "last_inferlet_metrics": all_metrics[-1] if all_metrics else {},
+                    },
+                ))
+                print(f"  0 overhead/{mode} [pie]: p50={stats['p50']:.0f}ms")
+
+    # --- SGLang: max_tokens=1 (minimal generation) ---
+    if sglang_url:
+        latencies = []
+        for _ in range(runs):
+            _, wall_ms, _ = await sglang_completion(
+                sglang_url, "x", max_tokens=1, temperature=0.0,
+            )
+            latencies.append(wall_ms)
+
+        stats = latency_stats(latencies)
+        results.append(BenchmarkResult(
+            name="0_overhead_one_token_sglang",
+            passed=True,
+            duration_sec=sum(latencies) / 1000.0,
+            details={
+                "engine": "sglang",
+                "mode": "one-token",
+                "runs": runs,
+                "latency_ms": {k: round(v, 2) for k, v in stats.items()},
+            },
+        ))
+        print(f"  0 overhead/one-token [sglang]: p50={stats['p50']:.0f}ms")
+
+    return results
+
+
 # ===========================================================================
 # TIER 1: Baseline Serving
 # ===========================================================================
@@ -518,6 +652,103 @@ async def tier1b_throughput_scaling(
                 },
             ))
             print(f"  1b c={level} [{label}]: {throughput_rps:.1f} req/s, p50={stats['p50']:.0f}ms")
+
+    return results
+
+
+async def tier1c_ttft(
+    pie_client: PieClient | None,
+    pie_inferlet: str | None,
+    pie_inferlets: dict[str, str] | None,
+    sglang_url: str | None,
+    runs: int = 5,
+) -> list[BenchmarkResult]:
+    """Tier 1C: Time-to-first-token comparison.
+
+    For Pie: runs the *text-completion* inferlet with `--max-tokens 1` and
+    uses wall time as a TTFT proxy. There is only one decode step, so
+    wall ≈ launch + WASM instantiate + prefill + 1 decode + WASM teardown
+    + Completed event delivery.
+
+    For SGLang: streams chat completions and measures the timestamp of
+    the first SSE chunk arrival.
+
+    *** MEASUREMENT ASYMMETRY (read before quoting these numbers) ***
+
+    Pie's wall time is end-to-end of a 1-token request. It includes the
+    WASM teardown + Completed event delivery tail (~10–50 ms by Tier 0
+    "noop" measurement). SGLang's streaming TTFT only includes time to
+    the first byte and excludes tear-down.
+
+    To get a comparable Pie TTFT, subtract the Tier 0 `noop` p50 from the
+    Pie value here. The remainder is closer to "real" prefill + 1 decode.
+    Better fix on the roadmap (C2 in next_benchmark_plan): a streaming
+    inferlet that emits a wall-clock marker after the first generate()
+    token returns.
+    """
+    results = []
+    configs = [
+        ("short", "Hello", 128),
+        ("medium", "Explain distributed systems in detail. " * 10, 128),
+        ("long", "Explain distributed systems in detail. " * 100, 256),
+    ]
+
+    for label, prompt, max_tokens in configs:
+        test_name = f"1c_ttft_{label}"
+
+        # --- Pie: use text-completion inferlet, measure wall time for one token ---
+        if pie_client and pie_inferlet:
+            latencies = []
+            for _ in range(runs):
+                _, wall_ms, _, ev = await pie_run_inferlet(
+                    pie_client, pie_inferlet,
+                    ["--prompt", prompt, "--max-tokens", "1", "--temperature", "0"],
+                )
+                if ev == Event.Completed:
+                    latencies.append(wall_ms)
+
+            stats = latency_stats(latencies)
+            results.append(BenchmarkResult(
+                name=f"{test_name}_pie",
+                passed=len(latencies) == runs,
+                duration_sec=sum(latencies) / 1000.0,
+                details={
+                    "engine": "pie",
+                    "prompt_label": label,
+                    "runs": runs,
+                    "latency_ms": {k: round(v, 2) for k, v in stats.items()},
+                    "note": (
+                        "TTFT approximated as wall time with max_tokens=1. "
+                        "Includes WASM teardown + Completed event tail "
+                        "(~10–50 ms — see Tier 0 noop). Subtract that to "
+                        "get a SGLang-comparable TTFT."
+                    ),
+                },
+            ))
+            print(f"  {test_name} [pie]: p50={stats['p50']:.0f}ms")
+
+        # --- SGLang: streaming mode, measure time to first chunk ---
+        if sglang_url:
+            ttfts = []
+            for _ in range(runs):
+                _, _, ttft_ms, _ = await sglang_completion_streaming(
+                    sglang_url, prompt, max_tokens=max_tokens, temperature=0.0,
+                )
+                ttfts.append(ttft_ms)
+
+            stats = latency_stats(ttfts)
+            results.append(BenchmarkResult(
+                name=f"{test_name}_sglang",
+                passed=True,
+                duration_sec=sum(ttfts) / 1000.0,
+                details={
+                    "engine": "sglang",
+                    "prompt_label": label,
+                    "runs": runs,
+                    "ttft_ms": {k: round(v, 2) for k, v in stats.items()},
+                },
+            ))
+            print(f"  {test_name} [sglang]: p50={stats['p50']:.0f}ms")
 
     return results
 
@@ -871,7 +1102,7 @@ async def tier2c_constrained_retry(
 
 async def run_benchmarks(args):
     all_results = []
-    tiers = set(args.tiers.split(",")) if args.tiers else {"1a", "1b", "2a", "2b", "2c"}
+    tiers = set(args.tiers.split(",")) if args.tiers else {"0", "1a", "1b", "1c", "2a", "2b", "2c"}
 
     # --- Connect to Pie ---
     pie_client = None
@@ -890,8 +1121,8 @@ async def run_benchmarks(args):
                 pie_client, TEXT_COMPLETION_WASM, TEXT_COMPLETION_MANIFEST,
             )
 
-        # Install benchmark inferlets for Tier 2
-        if any(t.startswith("2") for t in tiers):
+        # Install benchmark inferlets for Tier 0 and Tier 2
+        if any(t.startswith("2") or t == "0" for t in tiers):
             for name in INFERLET_WASMS:
                 wasm = INFERLET_WASMS[name]
                 manifest = INFERLET_MANIFESTS[name]
@@ -931,6 +1162,14 @@ async def run_benchmarks(args):
 
     # --- Run tests ---
     try:
+        if "0" in tiers:
+            print("\n--- Tier 0: Overhead Isolation ---")
+            r = await tier0_overhead(
+                pie_client, pie_inferlets, sglang_url,
+                runs=args.runs,
+            )
+            all_results.extend(r)
+
         if "1a" in tiers:
             print("\n--- Tier 1A: Single-Request Latency ---")
             r = await tier1a_single_request(
@@ -944,6 +1183,14 @@ async def run_benchmarks(args):
             r = await tier1b_throughput_scaling(
                 pie_client, pie_text_completion, sglang_url,
                 max_concurrency=args.max_concurrency,
+            )
+            all_results.extend(r)
+
+        if "1c" in tiers:
+            print("\n--- Tier 1C: Time-to-First-Token ---")
+            r = await tier1c_ttft(
+                pie_client, pie_text_completion, pie_inferlets, sglang_url,
+                runs=args.runs,
             )
             all_results.extend(r)
 
@@ -1003,7 +1250,7 @@ def print_comparison_summary(results: list[BenchmarkResult]):
     for test_name, engines in sorted(tests.items()):
         print(f"\n  {test_name}:")
         for engine, r in sorted(engines.items()):
-            lat = r.details.get("latency_ms", {})
+            lat = r.details.get("latency_ms", r.details.get("ttft_ms", {}))
             p50 = lat.get("p50", 0)
 
             extra = ""
@@ -1035,7 +1282,7 @@ def main():
     )
     parser.add_argument(
         "--tiers", default=None,
-        help="Comma-separated tier list (e.g., 1a,1b,2a,2b,2c). Default: all",
+        help="Comma-separated tier list (e.g., 0,1a,1b,1c,2a,2b,2c). Default: all",
     )
     parser.add_argument(
         "--runs", type=int, default=5,

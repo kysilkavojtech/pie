@@ -545,9 +545,26 @@ async def tier1c_ttft(
 ) -> list[BenchmarkResult]:
     """Tier 1C: Time-to-first-token comparison.
 
-    For Pie: uses the noop inferlet in 'one-token' mode — TTFT includes WASM
-    instantiation + prefill + first decode step.
-    For vLLM: uses streaming mode to measure time to first SSE chunk.
+    For Pie: runs the *text-completion* inferlet with `--max-tokens 1` and
+    uses wall time as a TTFT proxy. There is only one decode step, so
+    wall ≈ launch + WASM instantiate + prefill + 1 decode + WASM teardown
+    + Completed event delivery.
+
+    For vLLM: streams chat completions and measures the timestamp of the
+    first SSE chunk arrival.
+
+    *** MEASUREMENT ASYMMETRY (read before quoting these numbers) ***
+
+    Pie's wall time is end-to-end of a 1-token request. It includes the
+    WASM teardown + Completed event delivery tail (~10–50 ms by Tier 0
+    "noop" measurement). vLLM's streaming TTFT only includes time to the
+    first byte and excludes tear-down.
+
+    To get a comparable Pie TTFT, subtract the Tier 0 `noop` p50 from the
+    Pie value here. The remainder is closer to "real" prefill + 1 decode.
+    Better fix on the roadmap (C2 in next_benchmark_plan): a streaming
+    inferlet that emits a wall-clock marker after the first generate()
+    token returns.
     """
     results = []
     configs = [
@@ -560,7 +577,9 @@ async def tier1c_ttft(
         test_name = f"1c_ttft_{label}"
 
         # --- Pie: use text-completion inferlet, measure wall time for one token ---
-        # (TTFT �� wall time when max_tokens=1 since there's only one decode step)
+        # (TTFT ~ wall time when max_tokens=1 since there's only one decode step;
+        #  see asymmetry note in the docstring — Pie's number includes WASM
+        #  teardown + Completed delivery, vLLM's does not.)
         if pie_client and pie_inferlet:
             latencies = []
             for _ in range(runs):
@@ -581,7 +600,12 @@ async def tier1c_ttft(
                     "prompt_label": label,
                     "runs": runs,
                     "latency_ms": {k: round(v, 2) for k, v in stats.items()},
-                    "note": "TTFT approximated as wall time with max_tokens=1",
+                    "note": (
+                        "TTFT approximated as wall time with max_tokens=1. "
+                        "Includes WASM teardown + Completed event tail "
+                        "(~10–50 ms — see Tier 0 noop). Subtract that to "
+                        "get a vLLM-comparable TTFT."
+                    ),
                 },
             ))
             print(f"  {test_name} [pie]: p50={stats['p50']:.0f}ms")
@@ -608,6 +632,155 @@ async def tier1c_ttft(
                 },
             ))
             print(f"  {test_name} [vllm]: p50={stats['p50']:.0f}ms")
+
+    return results
+
+
+async def tier1d_batch_size_sweep(
+    pie_client: PieClient | None,
+    pie_inferlet: str | None,
+    vllm_url: str | None,
+    levels: list[int] | None = None,
+    prompt_tokens_target: int = 128,
+    output_tokens: int = 128,
+    runs_per_level: int = 4,
+) -> list[BenchmarkResult]:
+    """Tier 1D: Aggregate per-token cost vs concurrency (D2).
+
+    Sweeps concurrency c in {1, 2, 4, 8, 16, 32} running the same fixed workload
+    at each level. The signal we care about is **aggregate output tokens per
+    second** at each c — its inverse, `aggregate_ms_per_token`, is the truly
+    amortized per-token cost.
+
+    Why not `mean_latency / output_tokens`?
+        At higher c, requests queue behind in-flight batches, so mean per-
+        request latency *grows* with concurrency. But the per-token *compute*
+        cost should *shrink* with batching (the actual D2 question). A curve
+        based on mean latency would lie. The aggregate-throughput inverse
+        avoids this by attributing total wall time to total tokens.
+
+    A flat aggregate_ms_per_token curve = per-token cost is constant (the
+    batch dimension does not amortize anything). A steep drop = per-batch
+    fixed cost is amortizing as batches grow (the suspected Pie pathology
+    where IPC + Python dispatch is paid per fire_batch, not per token).
+
+    The complementary signal lives in the server's `[PROFILING] path=local`
+    flush lines: the `total_ms` and `batch_size` averages there give the
+    direct per-batch cost. Run with `PIE_WORKER_PROFILING=1` and correlate.
+
+    Note: this assumes both engines actually emit `output_tokens` tokens per
+    request (no early EOS). For greedy decoding on substantive prompts that
+    is usually true; if early EOS becomes a problem, switch to a sampler
+    with no stop tokens or count actual output tokens from server stats.
+    """
+    results = []
+    if levels is None:
+        levels = [1, 2, 4, 8, 16, 32]
+
+    # Build a prompt of roughly the requested token count. Char-count
+    # heuristic — both engines see the exact same string, so any tokenizer
+    # mismatch cancels out across the comparison.
+    base = "Explain distributed systems in detail. "  # ~6 tokens
+    repeats = max(1, prompt_tokens_target // 6)
+    prompt = (base * repeats).strip()
+
+    for engine, label in [("pie", "pie"), ("vllm", "vllm")]:
+        if engine == "pie" and pie_client is None:
+            continue
+        if engine == "vllm" and vllm_url is None:
+            continue
+
+        for level in levels:
+            reqs = max(level, runs_per_level)
+
+            async def run_one_pie():
+                _, wall, _, ev = await pie_run_inferlet(
+                    pie_client, pie_inferlet,
+                    ["--prompt", prompt, "--max-tokens", str(output_tokens),
+                     "--temperature", "0"],
+                )
+                return wall, ev == Event.Completed
+
+            async def run_one_vllm():
+                _, wall, _ = await vllm_completion(
+                    vllm_url, prompt, max_tokens=output_tokens, temperature=0.0,
+                )
+                return wall, True
+
+            run_fn = run_one_pie if engine == "pie" else run_one_vllm
+
+            queue = asyncio.Queue()
+            for i in range(reqs):
+                queue.put_nowait(i)
+
+            latencies = []
+            failures = 0
+
+            async def worker():
+                nonlocal failures
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    wall, ok = await run_fn()
+                    if ok:
+                        latencies.append(wall)
+                    else:
+                        failures += 1
+
+            start = time.perf_counter()
+            workers = [asyncio.create_task(worker()) for _ in range(level)]
+            await asyncio.gather(*workers)
+            duration = time.perf_counter() - start
+
+            stats = latency_stats(latencies)
+            mean_latency = sum(latencies) / len(latencies) if latencies else 0.0
+            # Aggregate output tokens per second across the entire batch.
+            # This is the metric whose INVERSE is true amortized ms/token.
+            total_output_tokens = len(latencies) * output_tokens
+            aggregate_output_tps = (
+                total_output_tokens / duration if duration > 0 else 0.0
+            )
+            aggregate_ms_per_token = (
+                (duration * 1000.0) / total_output_tokens
+                if total_output_tokens > 0
+                else 0.0
+            )
+            throughput_rps = len(latencies) / duration if duration > 0 else 0.0
+
+            results.append(BenchmarkResult(
+                name=f"1d_batchsweep_c{level}_{label}",
+                passed=failures == 0,
+                duration_sec=duration,
+                details={
+                    "engine": label,
+                    "concurrency": level,
+                    "requests": reqs,
+                    "completed": len(latencies),
+                    "failures": failures,
+                    "prompt_tokens_target": prompt_tokens_target,
+                    "output_tokens_per_req": output_tokens,
+                    "total_output_tokens": total_output_tokens,
+                    "wall_clock_sec": round(duration, 3),
+                    "mean_request_latency_ms": round(mean_latency, 2),
+                    "aggregate_output_tps": round(aggregate_output_tps, 1),
+                    "aggregate_ms_per_token": round(aggregate_ms_per_token, 3),
+                    "throughput_rps": round(throughput_rps, 2),
+                    "latency_ms": {k: round(v, 2) for k, v in stats.items()},
+                    "note": (
+                        "aggregate_ms_per_token is wall_clock/total_tokens — "
+                        "correlate with [PROFILING] path=local total_ms / "
+                        "batch_size from server stderr for the per-batch view."
+                    ),
+                },
+            ))
+            print(
+                f"  1d c={level} [{label}]: "
+                f"agg_tps={aggregate_output_tps:.0f}, "
+                f"agg_ms/tok={aggregate_ms_per_token:.2f}, "
+                f"mean_lat={mean_latency:.0f}ms"
+            )
 
     return results
 
@@ -955,7 +1128,7 @@ async def tier2c_constrained_retry(
 
 async def run_benchmarks(args):
     all_results = []
-    tiers = set(args.tiers.split(",")) if args.tiers else {"0", "1a", "1b", "1c", "2a", "2b", "2c"}
+    tiers = set(args.tiers.split(",")) if args.tiers else {"0", "1a", "1b", "1c", "1d", "2a", "2b", "2c"}
 
     # --- Connect to Pie ---
     pie_client = None
@@ -1045,6 +1218,13 @@ async def run_benchmarks(args):
             )
             all_results.extend(r)
 
+        if "1d" in tiers:
+            print("\n--- Tier 1D: Per-Token Cost vs Batch Size (D2) ---")
+            r = await tier1d_batch_size_sweep(
+                pie_client, pie_text_completion, vllm_url,
+            )
+            all_results.extend(r)
+
         if "2a" in tiers:
             print("\n--- Tier 2A: Chain-of-Generations ---")
             r = await tier2a_chain_of_gen(
@@ -1093,6 +1273,13 @@ async def run_benchmarks(args):
             delta = after - before
             if delta != 0:
                 print(f"  {key}: {delta:.4f}")
+
+    # --- Apply label suffix (for APC-on/APC-off tagging) ---
+    if args.label_suffix:
+        suffix = args.label_suffix.strip().lstrip("_")
+        for r in all_results:
+            r.name = f"{r.name}__{suffix}"
+            r.details["label_suffix"] = suffix
 
     # --- Print comparison tables ---
     print_comparison_summary(all_results)
@@ -1177,6 +1364,15 @@ def main():
     parser.add_argument(
         "--vllm-metrics", action="store_true",
         help="Scrape vLLM /metrics endpoint for detailed timing breakdown",
+    )
+    parser.add_argument(
+        "--label-suffix", default=None,
+        help=(
+            "Append a suffix to every BenchmarkResult.name (e.g. 'apc_on'). "
+            "Use this to tag results when running against a vLLM server "
+            "started with --enable-prefix-caching so APC-on and APC-off "
+            "runs can be compared side-by-side in the same JSON file."
+        ),
     )
     parser.add_argument(
         "--output-json", default=None,
