@@ -34,6 +34,10 @@ name = "sglang"
 type = "openai"
 base_url = "http://localhost:30000"
 
+# --- Harness backend settings (only used with --backend harness) ---
+# [harness]
+# num_fewshot = 5          # few-shot examples (None = use task default)
+
 # --- Datasets ---
 
 [[dataset]]
