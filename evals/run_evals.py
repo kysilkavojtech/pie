@@ -55,6 +55,11 @@ def main() -> None:
         "--no-think", action="store_true",
         help="Append /no_think to prompts (disables thinking mode on Qwen3, etc.)",
     )
+    parser.add_argument(
+        "--backend", choices=["harness", "custom"], default="harness",
+        help="Evaluation backend: 'harness' (lm-evaluation-harness, default) "
+             "or 'custom' (built-in extraction)",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -65,8 +70,9 @@ def main() -> None:
     dataset_filter = args.datasets.split(",") if args.datasets else None
     engine_filter = args.engines.split(",") if args.engines else None
 
-    results = asyncio.run(
-        run_eval(
+    if args.backend == "harness":
+        from .harness_runner import run_harness_eval
+        results = run_harness_eval(
             config,
             engine_filter=engine_filter,
             dataset_filter=dataset_filter,
@@ -74,7 +80,17 @@ def main() -> None:
             verbose=args.verbose,
             no_think=args.no_think,
         )
-    )
+    else:
+        results = asyncio.run(
+            run_eval(
+                config,
+                engine_filter=engine_filter,
+                dataset_filter=dataset_filter,
+                limit_override=args.limit,
+                verbose=args.verbose,
+                no_think=args.no_think,
+            )
+        )
 
     results.print_table()
 

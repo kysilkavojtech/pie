@@ -34,6 +34,8 @@ class EvalConfig:
     concurrency: int = 4
     limit: int = 0  # 0 = all questions
     output_dir: str = "evals/results"
+    # Harness backend settings
+    harness_num_fewshot: int | None = None  # None = use task default
 
 
 def load_config(path: Path) -> EvalConfig:
@@ -73,6 +75,9 @@ def load_config(path: Path) -> EvalConfig:
             )
         )
 
+    # Optional [harness] section
+    harness_raw = raw.get("harness", {})
+
     return EvalConfig(
         generation=generation,
         engines=engines,
@@ -80,4 +85,5 @@ def load_config(path: Path) -> EvalConfig:
         concurrency=run.get("concurrency", 4),
         limit=run.get("limit", 0),
         output_dir=run.get("output_dir", "evals/results"),
+        harness_num_fewshot=harness_raw.get("num_fewshot"),
     )
