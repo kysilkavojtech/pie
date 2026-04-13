@@ -7,9 +7,8 @@ results back to our ``EvalResults`` format for unified output.
 Engine/task compatibility:
   - OpenAI engines (vLLM, SGLang) use ``local-completions`` which supports
     both loglikelihood (MCQ) and generate_until tasks.
-  - Pie engine uses our custom PieLM which only supports generate_until.
-    Loglikelihood-based tasks (ARC MCQ) will error with Pie — use
-    ``--backend custom`` for those.
+  - Pie engine uses our custom PieLM which supports generate_until (via the
+    text-completion inferlet) and loglikelihood (via the loglikelihood inferlet).
 """
 
 import httpx
@@ -24,13 +23,10 @@ from .results import EvalResults, DatasetResult, QuestionResult
 # ---------------------------------------------------------------------------
 # Verify available tasks with: lm_eval --tasks list
 TASK_NAME_MAP: dict[str, str] = {
-    "arc_easy": "arc_easy",          # MCQ (loglikelihood) — OpenAI engines only
-    "arc_challenge": "arc_challenge",  # MCQ (loglikelihood) — OpenAI engines only
-    "math500": "minerva_math500",    # generate_until — all engines
+    "arc_easy": "arc_easy",          # MCQ (loglikelihood)
+    "arc_challenge": "arc_challenge",  # MCQ (loglikelihood)
+    "math500": "minerva_math500",    # generate_until
 }
-
-# Tasks that require loglikelihood (not supported by Pie)
-_LOGLIKELIHOOD_TASKS: set[str] = {"arc_easy", "arc_challenge"}
 
 # Reverse map for result conversion
 _TASK_NAME_REVERSE: dict[str, str] = {v: k for k, v in TASK_NAME_MAP.items()}
@@ -285,18 +281,7 @@ def run_harness_eval(
     for engine_cfg in engine_cfgs:
         model_type, model_args = _build_model_spec(engine_cfg)
 
-        # Filter out loglikelihood tasks for Pie (only supports generate_until)
         engine_tasks = lm_tasks
-        if engine_cfg.type == "pie":
-            skipped = [t for t in lm_tasks if _our_name(t) in _LOGLIKELIHOOD_TASKS]
-            engine_tasks = [t for t in lm_tasks if _our_name(t) not in _LOGLIKELIHOOD_TASKS]
-            if skipped:
-                skipped_names = [_our_name(t) for t in skipped]
-                print(f"\n  Skipping {skipped_names} for {engine_cfg.name} "
-                      f"(loglikelihood tasks not supported — use --backend custom)")
-            if not engine_tasks:
-                print(f"  No compatible tasks for {engine_cfg.name}, skipping.")
-                continue
 
         print(f"\nRunning lm-eval: engine={engine_cfg.name} ({model_type}), "
               f"tasks={engine_tasks}, limit={limit}")

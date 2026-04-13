@@ -1,0 +1,12 @@
+[package]
+name = "loglikelihood"
+version = "0.1.0"
+description = "Compute log-likelihood of continuations given a context"
+authors = ["Pie Team"]
+
+[runtime]
+core = "^0.2.0"
+
+[parameters]
+context = {type = "string", description = "The prompt/context text (raw, pre-formatted by caller)"}
+continuations = {type = "string", description = "JSON array of continuation strings to score"}
