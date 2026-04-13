@@ -5,12 +5,17 @@ import string
 
 
 def strip_thinking(text: str) -> str:
-    """Remove <think>...</think> blocks (e.g. from Qwen3 thinking mode)."""
+    """Remove <think>...</think> blocks (e.g. from Qwen3 thinking mode).
+
+    If the output is truncated mid-think (opened <think> but never closed),
+    returns empty string — the model never produced an answer.
+    """
     stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if "<think>" in stripped:
         _, _, after = stripped.partition("</think>")
         if after.strip():
             return after.strip()
+        return ""
     return stripped if stripped else text
 
 
