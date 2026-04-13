@@ -15,12 +15,27 @@ from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
 
 
+def strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks (e.g. from Qwen3 thinking mode)."""
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # If the model is still mid-think (truncated), take content after the tag
+    if "<think>" in stripped:
+        _, _, after = stripped.partition("</think>")
+        if after.strip():
+            return after.strip()
+        # Truncated mid-think with no answer after — return as-is
+    return stripped if stripped else text
+
+
 def accuracy_reward(completion: str, solution: str) -> Optional[float]:
     """Check if *completion* is mathematically equivalent to *solution*.
 
     Returns 1.0 (correct), 0.0 (incorrect), or None (unparseable gold).
     Tries strict parsing first (requires ``\\boxed{}``) then lenient.
+    Strips ``<think>`` blocks from thinking models (e.g. Qwen3).
     """
+    completion = strip_thinking(completion)
+
     if completion.lower().strip() == solution.lower().strip():
         return 1.0
 

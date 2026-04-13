@@ -4,6 +4,16 @@ import re
 import string
 
 
+def strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks (e.g. from Qwen3 thinking mode)."""
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    if "<think>" in stripped:
+        _, _, after = stripped.partition("</think>")
+        if after.strip():
+            return after.strip()
+    return stripped if stripped else text
+
+
 def extract_multiple_choice(
     text: str, valid_choices: str = "ABCDE"
 ) -> str | None:
@@ -14,6 +24,7 @@ def extract_multiple_choice(
       2. Pattern like "the answer is (C)" / "Answer: C".
       3. Last standalone valid letter in the text.
     """
+    text = strip_thinking(text)
     stripped = text.strip().rstrip(".")
     upper_valid = valid_choices.upper()
 
