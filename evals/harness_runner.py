@@ -26,6 +26,9 @@ TASK_NAME_MAP: dict[str, str] = {
     "arc_easy": "arc_easy",          # MCQ (loglikelihood)
     "arc_challenge": "arc_challenge",  # MCQ (loglikelihood)
     "math500": "minerva_math500",    # generate_until
+    "mmlu": "mmlu",                  # MCQ 57 subjects (loglikelihood)
+    "aime_2024": "aime_2024",        # generate_until (integer 0-999)
+    "hotpot_qa": "hotpot_qa",        # generate_until (short text)
 }
 
 # Reverse map for result conversion

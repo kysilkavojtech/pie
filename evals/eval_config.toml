@@ -48,3 +48,12 @@ name = "arc_challenge"
 
 [[dataset]]
 name = "math500"
+
+[[dataset]]
+name = "mmlu"
+
+[[dataset]]
+name = "aime_2024"
+
+[[dataset]]
+name = "hotpot_qa"
