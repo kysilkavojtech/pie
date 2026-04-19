@@ -222,6 +222,9 @@ logs
 # No MCP files
 .memory-bank
 
+# Auto-generated eval configs
+evals/pie_serve_config.toml
+
 # raw eval data
 cuda-protocol-tests*
 metal-protocol-tests*
