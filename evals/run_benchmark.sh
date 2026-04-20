@@ -143,6 +143,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ---------------------------------------------------------------------------
+# Parse engine list
+# ---------------------------------------------------------------------------
+
+IFS=',' read -ra ENGINE_LIST <<< "$ENGINES"
+
+has_engine() {
+    local target="$1"
+    for e in "${ENGINE_LIST[@]}"; do
+        [[ "$e" == "$target" ]] && return 0
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
 
@@ -239,20 +253,6 @@ if cached is None or cached is False:
 else:
     print('  $MODEL already cached.')
 "
-
-# ---------------------------------------------------------------------------
-# Parse engine list
-# ---------------------------------------------------------------------------
-
-IFS=',' read -ra ENGINE_LIST <<< "$ENGINES"
-
-has_engine() {
-    local target="$1"
-    for e in "${ENGINE_LIST[@]}"; do
-        [[ "$e" == "$target" ]] && return 0
-    done
-    return 1
-}
 
 MAX_RETRIES=120  # 2 minutes (model loading can be slow)
 
