@@ -28,21 +28,14 @@ async fn main(mut args: Args) -> Result<String> {
 
     let mut results = Vec::new();
 
-    for (ci, continuation) in continuations.iter().enumerate() {
+    for continuation in &continuations {
         let mut fork = ctx.fork();
         let tokens = fork.tokenizer.tokenize(continuation);
         let mut logprob = 0.0f32;
         let mut all_greedy = true;
 
-        eprintln!("[DEBUG] continuation {ci}: {continuation:?} -> {tokens:?}");
-
-        for (ti, &token_id) in tokens.iter().enumerate() {
+        for &token_id in &tokens {
             let dist = fork.decode_step_dist_top_k(Some(131072)).await;
-
-            eprintln!("[DEBUG]   step {ti}: want token_id={token_id}, dist has {} entries, top5_ids={:?}, top5_probs={:?}",
-                dist.ids.len(),
-                &dist.ids[..dist.ids.len().min(5)],
-                &dist.probs[..dist.probs.len().min(5)]);
 
             // Check if this token is the greedy (argmax) choice
             if !dist.ids.is_empty() && dist.ids[0] != token_id {
@@ -52,7 +45,6 @@ async fn main(mut args: Args) -> Result<String> {
             // Find the token's probability in the distribution
             if let Some(idx) = dist.ids.iter().position(|&id| id == token_id) {
                 let prob = dist.probs[idx];
-                eprintln!("[DEBUG]   found at idx={idx}, prob={prob}");
                 if prob > 0.0 {
                     logprob += prob.ln();
                 } else {
@@ -62,7 +54,6 @@ async fn main(mut args: Args) -> Result<String> {
                 }
             } else {
                 // Token not in top-k distribution — negligible probability
-                eprintln!("[DEBUG]   NOT FOUND in distribution — setting -inf");
                 logprob = f32::NEG_INFINITY;
                 all_greedy = false;
                 break;
