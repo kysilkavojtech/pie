@@ -330,13 +330,22 @@ fi
 
 # --- vLLM ---
 if has_engine vllm; then
-    log "${BOLD}Starting vLLM...${NC}"
+    log "${BOLD}Setting up vLLM...${NC}"
 
-    if ! python -m vllm.entrypoints.openai.api_server --help &>/dev/null 2>&1; then
-        die "vLLM not found. Install it in a separate venv:
-  python -m venv ~/.venvs/vllm && source ~/.venvs/vllm/bin/activate && pip install vllm"
+    VLLM_VENV="$HOME/.venvs/vllm"
+    if [[ -d "$VLLM_VENV" ]]; then
+        source "$VLLM_VENV/bin/activate"
     fi
 
+    if ! python -m vllm.entrypoints.openai.api_server --help &>/dev/null 2>&1; then
+        log "  vLLM not found — installing into $VLLM_VENV..."
+        python -m venv "$VLLM_VENV"
+        source "$VLLM_VENV/bin/activate"
+        pip install --quiet vllm
+        ok "vLLM installed"
+    fi
+
+    log "Starting vLLM..."
     vllm serve "$MODEL" --port "$VLLM_PORT" &
     VLLM_PID=$!
 
@@ -357,13 +366,22 @@ fi
 
 # --- SGLang ---
 if has_engine sglang; then
-    log "${BOLD}Starting SGLang...${NC}"
+    log "${BOLD}Setting up SGLang...${NC}"
 
-    if ! python -m sglang.launch_server --help &>/dev/null 2>&1; then
-        die "SGLang not found. Install it in a separate venv:
-  python -m venv ~/.venvs/sglang && source ~/.venvs/sglang/bin/activate && pip install 'sglang[all]'"
+    SGLANG_VENV="$HOME/.venvs/sglang"
+    if [[ -d "$SGLANG_VENV" ]]; then
+        source "$SGLANG_VENV/bin/activate"
     fi
 
+    if ! python -m sglang.launch_server --help &>/dev/null 2>&1; then
+        log "  SGLang not found — installing into $SGLANG_VENV..."
+        python -m venv "$SGLANG_VENV"
+        source "$SGLANG_VENV/bin/activate"
+        pip install --quiet 'sglang[all]'
+        ok "SGLang installed"
+    fi
+
+    log "Starting SGLang..."
     python -m sglang.launch_server --model "$MODEL" --port "$SGLANG_PORT" &
     SGLANG_PID=$!
 
