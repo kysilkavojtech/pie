@@ -41,7 +41,9 @@ LIMIT=""
 BACKEND="harness"
 DEVICE="cuda:0"
 WITH_VLLM=false
+WITH_SGLANG=false
 VLLM_PORT="${VLLM_PORT:-8000}"
+SGLANG_PORT="${SGLANG_PORT:-30000}"
 PIE_PORT="${PIE_PORT:-8080}"
 VERBOSE=""
 NO_THINK=""
@@ -52,6 +54,7 @@ OUTPUT_JSON=""
 # PIDs to clean up
 PIE_PID=""
 VLLM_PID=""
+SGLANG_PID=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,6 +84,11 @@ cleanup() {
         kill "$VLLM_PID" 2>/dev/null || true
         wait "$VLLM_PID" 2>/dev/null || true
     fi
+    if [[ -n "$SGLANG_PID" ]] && kill -0 "$SGLANG_PID" 2>/dev/null; then
+        log "Stopping SGLang server (PID $SGLANG_PID)"
+        kill "$SGLANG_PID" 2>/dev/null || true
+        wait "$SGLANG_PID" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
@@ -95,7 +103,9 @@ Options:
   --device DEVICE       GPU device(s), e.g. "cuda:0" or "cuda:0,cuda:1" (default: $DEVICE)
   --backend TYPE        harness (default) or custom
   --with-vllm           Also start vLLM and compare against it
+  --with-sglang         Also start SGLang and compare against it
   --vllm-port PORT      vLLM port (default: $VLLM_PORT)
+  --sglang-port PORT    SGLang port (default: $SGLANG_PORT)
   --pie-port PORT       Pie server port (default: $PIE_PORT)
   --output-json PATH    Save results JSON to this path
   --no-think            Disable thinking mode (Qwen3, etc.)
@@ -119,7 +129,9 @@ while [[ $# -gt 0 ]]; do
         --device)       DEVICE="$2"; shift 2 ;;
         --backend)      BACKEND="$2"; shift 2 ;;
         --with-vllm)    WITH_VLLM=true; shift ;;
+        --with-sglang)  WITH_SGLANG=true; shift ;;
         --vllm-port)    VLLM_PORT="$2"; shift 2 ;;
+        --sglang-port)  SGLANG_PORT="$2"; shift 2 ;;
         --pie-port)     PIE_PORT="$2"; shift 2 ;;
         --output-json)  OUTPUT_JSON="$2"; shift 2 ;;
         --no-think)     NO_THINK="--no-think"; shift ;;
@@ -143,6 +155,7 @@ log "  Backend:  $BACKEND"
 log "  Datasets: ${DATASETS:-all}"
 log "  Limit:    ${LIMIT:-all}"
 log "  vLLM:     $WITH_VLLM"
+log "  SGLang:   $WITH_SGLANG"
 echo ""
 
 [[ -d "$PIE_DIR" ]] || die "Pie directory not found at $PIE_DIR"
@@ -326,9 +339,45 @@ if [[ "$WITH_VLLM" == true ]]; then
         sleep 1
     done
     ok "vLLM ready (PID $VLLM_PID)"
-    ENGINES_FLAG="pie,vllm"
-else
-    ENGINES_FLAG="pie"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 5b: Optionally start SGLang
+# ---------------------------------------------------------------------------
+
+if [[ "$WITH_SGLANG" == true ]]; then
+    log "${BOLD}Starting SGLang...${NC}"
+
+    if ! python -m sglang.launch_server --help &>/dev/null 2>&1; then
+        die "SGLang not found. Install it in a separate venv:
+  python -m venv ~/.venvs/sglang && source ~/.venvs/sglang/bin/activate && pip install 'sglang[all]'"
+    fi
+
+    python -m sglang.launch_server --model "$MODEL" --port "$SGLANG_PORT" &
+    SGLANG_PID=$!
+
+    log "  Waiting for SGLang (port $SGLANG_PORT)..."
+    RETRIES=0
+    while ! curl -s "http://localhost:$SGLANG_PORT/v1/models" &>/dev/null; do
+        RETRIES=$((RETRIES + 1))
+        if [[ $RETRIES -ge $MAX_RETRIES ]]; then
+            die "SGLang failed to start after ${MAX_RETRIES}s"
+        fi
+        if ! kill -0 "$SGLANG_PID" 2>/dev/null; then
+            die "SGLang process died during startup"
+        fi
+        sleep 1
+    done
+    ok "SGLang ready (PID $SGLANG_PID)"
+fi
+
+# Build engines flag
+ENGINES_FLAG="pie"
+if [[ "$WITH_VLLM" == true ]]; then
+    ENGINES_FLAG="${ENGINES_FLAG},vllm"
+fi
+if [[ "$WITH_SGLANG" == true ]]; then
+    ENGINES_FLAG="${ENGINES_FLAG},sglang"
 fi
 
 # ---------------------------------------------------------------------------
@@ -340,12 +389,13 @@ echo ""
 
 # Generate a temp config with correct ports (eval_config.toml hardcodes defaults)
 EVAL_CONFIG="$PIE_REPO/evals/eval_config.toml"
-if [[ "$PIE_PORT" != "8080" ]] || [[ "$VLLM_PORT" != "8000" ]]; then
+if [[ "$PIE_PORT" != "8080" ]] || [[ "$VLLM_PORT" != "8000" ]] || [[ "$SGLANG_PORT" != "30000" ]]; then
     EVAL_CONFIG=$(mktemp /tmp/pie_eval_config.XXXXXX.toml)
     sed -e "s|ws://127.0.0.1:8080|ws://127.0.0.1:$PIE_PORT|g" \
         -e "s|http://localhost:8000|http://localhost:$VLLM_PORT|g" \
+        -e "s|http://localhost:30000|http://localhost:$SGLANG_PORT|g" \
         "$PIE_REPO/evals/eval_config.toml" > "$EVAL_CONFIG"
-    log "  Using patched config (pie=$PIE_PORT, vllm=$VLLM_PORT)"
+    log "  Using patched config (pie=$PIE_PORT, vllm=$VLLM_PORT, sglang=$SGLANG_PORT)"
 fi
 
 # Build the eval command
