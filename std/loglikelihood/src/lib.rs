@@ -37,7 +37,7 @@ async fn main(mut args: Args) -> Result<String> {
         eprintln!("[DEBUG] continuation {ci}: {continuation:?} -> {tokens:?}");
 
         for (ti, &token_id) in tokens.iter().enumerate() {
-            let dist = fork.decode_step_dist().await;
+            let dist = fork.decode_step_dist_top_k(Some(131072)).await;
 
             eprintln!("[DEBUG]   step {ti}: want token_id={token_id}, dist has {} entries, top5_ids={:?}, top5_probs={:?}",
                 dist.ids.len(),
