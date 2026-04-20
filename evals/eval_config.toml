@@ -54,6 +54,3 @@ name = "mmlu"
 
 [[dataset]]
 name = "aime24"
-
-[[dataset]]
-name = "hotpotqa"

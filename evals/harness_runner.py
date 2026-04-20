@@ -28,7 +28,6 @@ TASK_NAME_MAP: dict[str, str] = {
     "math500": "minerva_math500",    # generate_until
     "mmlu": "mmlu",                  # MCQ 57 subjects (loglikelihood)
     "aime24": "aime24",              # generate_until (integer 0-999)
-    "hotpotqa": "longbench_hotpotqa", # generate_until (short text, via LongBench)
 }
 
 # Reverse map for result conversion
