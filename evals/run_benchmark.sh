@@ -342,8 +342,13 @@ if has_engine vllm; then
         ok "vLLM installed"
     fi
 
-    log "Starting vLLM..."
-    "$VLLM_VENV/bin/vllm" serve "$MODEL" --port "$VLLM_PORT" &
+    # Limit GPU memory so multiple engines can coexist
+    NUM_ENGINES=${#ENGINE_LIST[@]}
+    VLLM_GPU_UTIL=$(awk "BEGIN {printf \"%.2f\", 0.85 / $NUM_ENGINES}")
+
+    log "Starting vLLM (gpu_memory_utilization=$VLLM_GPU_UTIL)..."
+    "$VLLM_VENV/bin/vllm" serve "$MODEL" --port "$VLLM_PORT" \
+        --gpu-memory-utilization "$VLLM_GPU_UTIL" &
     VLLM_PID=$!
 
     log "  Waiting for vLLM (port $VLLM_PORT)..."
@@ -373,8 +378,13 @@ if has_engine sglang; then
         ok "SGLang installed"
     fi
 
-    log "Starting SGLang..."
-    "$SGLANG_VENV/bin/python" -m sglang.launch_server --model "$MODEL" --port "$SGLANG_PORT" &
+    # Limit GPU memory so multiple engines can coexist
+    NUM_ENGINES=${#ENGINE_LIST[@]}
+    SGLANG_GPU_UTIL=$(awk "BEGIN {printf \"%.2f\", 0.85 / $NUM_ENGINES}")
+
+    log "Starting SGLang (mem_fraction=$SGLANG_GPU_UTIL)..."
+    "$SGLANG_VENV/bin/python" -m sglang.launch_server --model "$MODEL" --port "$SGLANG_PORT" \
+        --mem-fraction-static "$SGLANG_GPU_UTIL" &
     SGLANG_PID=$!
 
     log "  Waiting for SGLang (port $SGLANG_PORT)..."
