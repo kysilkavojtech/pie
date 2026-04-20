@@ -1,6 +1,6 @@
 [package]
 name = "loglikelihood"
-version = "0.1.0"
+version = "0.1.1"
 description = "Compute log-likelihood of continuations given a context"
 authors = ["Pie Team"]
 
