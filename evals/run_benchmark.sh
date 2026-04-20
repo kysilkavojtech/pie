@@ -12,17 +12,20 @@
 #
 # Usage:
 #   ./evals/run_benchmark.sh                              # defaults: Qwen3-0.6B, all datasets, pie only
+#   ./evals/run_benchmark.sh --engines pie,vllm           # pie + vllm comparison
+#   ./evals/run_benchmark.sh --engines vllm               # vllm only (no pie)
+#   ./evals/run_benchmark.sh --engines pie,vllm,sglang    # all three
 #   ./evals/run_benchmark.sh --model Qwen/Qwen3-8B       # different model
-#   ./evals/run_benchmark.sh --with-vllm                  # also run vLLM for comparison
 #   ./evals/run_benchmark.sh --datasets arc_easy,math500  # subset of datasets
 #   ./evals/run_benchmark.sh --limit 20                   # quick smoke test
 #   ./evals/run_benchmark.sh --device "cuda:0,cuda:1"     # multi-GPU tensor parallel
 #   ./evals/run_benchmark.sh --backend custom              # use custom backend instead of harness
 #
 # Environment:
-#   PIE_REPO    — repo root (auto-detected from script location)
-#   VLLM_PORT   — vLLM port (default: 8000)
-#   PIE_PORT    — Pie server port (default: 8080)
+#   PIE_REPO     — repo root (auto-detected from script location)
+#   VLLM_PORT    — vLLM port (default: 8000)
+#   SGLANG_PORT  — SGLang port (default: 30000)
+#   PIE_PORT     — Pie server port (default: 8080)
 #
 set -euo pipefail
 
@@ -36,12 +39,10 @@ PIE_DIR="$PIE_REPO/pie"
 
 MODEL="Qwen/Qwen3-0.6B"
 DATASETS=""
-ENGINES=""
+ENGINES="pie"
 LIMIT=""
 BACKEND="harness"
 DEVICE="cuda:0"
-WITH_VLLM=false
-WITH_SGLANG=false
 VLLM_PORT="${VLLM_PORT:-8000}"
 SGLANG_PORT="${SGLANG_PORT:-30000}"
 PIE_PORT="${PIE_PORT:-8080}"
@@ -98,12 +99,11 @@ Usage: $(basename "$0") [OPTIONS]
 
 Options:
   --model MODEL         HuggingFace model repo (default: $MODEL)
+  --engines LIST        Comma-separated engines: pie,vllm,sglang (default: $ENGINES)
   --datasets LIST       Comma-separated datasets (default: all in config)
   --limit N             Max questions per dataset (quick test)
   --device DEVICE       GPU device(s), e.g. "cuda:0" or "cuda:0,cuda:1" (default: $DEVICE)
   --backend TYPE        harness (default) or custom
-  --with-vllm           Also start vLLM and compare against it
-  --with-sglang         Also start SGLang and compare against it
   --vllm-port PORT      vLLM port (default: $VLLM_PORT)
   --sglang-port PORT    SGLang port (default: $SGLANG_PORT)
   --pie-port PORT       Pie server port (default: $PIE_PORT)
@@ -124,12 +124,11 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --model)        MODEL="$2"; shift 2 ;;
+        --engines)      ENGINES="$2"; shift 2 ;;
         --datasets)     DATASETS="$2"; shift 2 ;;
         --limit)        LIMIT="$2"; shift 2 ;;
         --device)       DEVICE="$2"; shift 2 ;;
         --backend)      BACKEND="$2"; shift 2 ;;
-        --with-vllm)    WITH_VLLM=true; shift ;;
-        --with-sglang)  WITH_SGLANG=true; shift ;;
         --vllm-port)    VLLM_PORT="$2"; shift 2 ;;
         --sglang-port)  SGLANG_PORT="$2"; shift 2 ;;
         --pie-port)     PIE_PORT="$2"; shift 2 ;;
@@ -152,10 +151,9 @@ log "  Repo:     $PIE_REPO"
 log "  Model:    $MODEL"
 log "  Device:   $DEVICE"
 log "  Backend:  $BACKEND"
+log "  Engines:  $ENGINES"
 log "  Datasets: ${DATASETS:-all}"
 log "  Limit:    ${LIMIT:-all}"
-log "  vLLM:     $WITH_VLLM"
-log "  SGLang:   $WITH_SGLANG"
 echo ""
 
 [[ -d "$PIE_DIR" ]] || die "Pie directory not found at $PIE_DIR"
@@ -174,27 +172,31 @@ fi
 # Step 1: Build inferlets
 # ---------------------------------------------------------------------------
 
-if [[ "$SKIP_BUILD" == false ]]; then
-    log "${BOLD}Building inferlets...${NC}"
+if has_engine pie; then
+    if [[ "$SKIP_BUILD" == false ]]; then
+        log "${BOLD}Building inferlets...${NC}"
 
-    log "  text-completion..."
-    cargo build --target wasm32-wasip2 --release \
-        --manifest-path "$PIE_REPO/std/text-completion/Cargo.toml" --quiet
+        log "  text-completion..."
+        cargo build --target wasm32-wasip2 --release \
+            --manifest-path "$PIE_REPO/std/text-completion/Cargo.toml" --quiet
 
-    log "  loglikelihood..."
-    cargo build --target wasm32-wasip2 --release \
-        --manifest-path "$PIE_REPO/std/loglikelihood/Cargo.toml" --quiet
+        log "  loglikelihood..."
+        cargo build --target wasm32-wasip2 --release \
+            --manifest-path "$PIE_REPO/std/loglikelihood/Cargo.toml" --quiet
 
-    ok "Inferlets built"
+        ok "Inferlets built"
+    else
+        warn "Skipping inferlet builds (--skip-build)"
+    fi
+
+    # Verify WASM files exist
+    TC_WASM="$PIE_REPO/std/text-completion/target/wasm32-wasip2/release/text_completion.wasm"
+    LL_WASM="$PIE_REPO/std/loglikelihood/target/wasm32-wasip2/release/loglikelihood.wasm"
+    [[ -f "$TC_WASM" ]] || die "text-completion WASM not found at $TC_WASM — run without --skip-build"
+    [[ -f "$LL_WASM" ]] || die "loglikelihood WASM not found at $LL_WASM — run without --skip-build"
 else
-    warn "Skipping inferlet builds (--skip-build)"
+    log "Skipping inferlet builds (pie not in engine list)"
 fi
-
-# Verify WASM files exist
-TC_WASM="$PIE_REPO/std/text-completion/target/wasm32-wasip2/release/text_completion.wasm"
-LL_WASM="$PIE_REPO/std/loglikelihood/target/wasm32-wasip2/release/loglikelihood.wasm"
-[[ -f "$TC_WASM" ]] || die "text-completion WASM not found at $TC_WASM — run without --skip-build"
-[[ -f "$LL_WASM" ]] || die "loglikelihood WASM not found at $LL_WASM — run without --skip-build"
 
 # ---------------------------------------------------------------------------
 # Step 2: Install Python dependencies
@@ -239,29 +241,46 @@ else:
 "
 
 # ---------------------------------------------------------------------------
-# Step 4: Configure and start Pie server
+# Parse engine list
 # ---------------------------------------------------------------------------
 
-log "${BOLD}Configuring Pie...${NC}"
+IFS=',' read -ra ENGINE_LIST <<< "$ENGINES"
 
-# Download Python runtime if not already present (needed by pie serve)
-if [[ ! -d "$HOME/.pie" ]] || [[ ! -d "$HOME/.pie/lib" ]]; then
-    uv run pie config init
-fi
+has_engine() {
+    local target="$1"
+    for e in "${ENGINE_LIST[@]}"; do
+        [[ "$e" == "$target" ]] && return 0
+    done
+    return 1
+}
 
-# Generate a local Pie server config inside evals/ so everything is self-contained.
-# This avoids touching ~/.pie/config.toml.
-PIE_SERVE_CONFIG="$PIE_REPO/evals/pie_serve_config.toml"
+MAX_RETRIES=120  # 2 minutes (model loading can be slow)
 
-# Build device array: "cuda:0,cuda:1" → ["cuda:0", "cuda:1"]
-IFS=',' read -ra DEV_ARRAY <<< "$DEVICE"
-DEVICE_LIST=""
-for d in "${DEV_ARRAY[@]}"; do
-    [[ -n "$DEVICE_LIST" ]] && DEVICE_LIST+=", "
-    DEVICE_LIST+="\"$d\""
-done
+# ---------------------------------------------------------------------------
+# Step 4: Start requested engines
+# ---------------------------------------------------------------------------
 
-cat > "$PIE_SERVE_CONFIG" <<TOML
+# --- Pie ---
+if has_engine pie; then
+    log "${BOLD}Configuring Pie...${NC}"
+
+    # Download Python runtime if not already present (needed by pie serve)
+    if [[ ! -d "$HOME/.pie" ]] || [[ ! -d "$HOME/.pie/lib" ]]; then
+        uv run pie config init
+    fi
+
+    # Generate a local Pie server config inside evals/ so everything is self-contained.
+    PIE_SERVE_CONFIG="$PIE_REPO/evals/pie_serve_config.toml"
+
+    # Build device array: "cuda:0,cuda:1" → ["cuda:0", "cuda:1"]
+    IFS=',' read -ra DEV_ARRAY <<< "$DEVICE"
+    DEVICE_LIST=""
+    for d in "${DEV_ARRAY[@]}"; do
+        [[ -n "$DEVICE_LIST" ]] && DEVICE_LIST+=", "
+        DEVICE_LIST+="\"$d\""
+    done
+
+    cat > "$PIE_SERVE_CONFIG" <<TOML
 # Auto-generated by run_benchmark.sh — do not edit manually
 host = "127.0.0.1"
 port = $PIE_PORT
@@ -280,17 +299,15 @@ max_dist_size = 64
 max_num_embeds = 128
 TOML
 
-log "  Config written to evals/pie_serve_config.toml"
+    log "  Config written to evals/pie_serve_config.toml"
 
-log "Starting Pie server..."
-uv run pie serve --config "$PIE_SERVE_CONFIG" &
-PIE_PID=$!
+    log "Starting Pie server..."
+    uv run pie serve --config "$PIE_SERVE_CONFIG" &
+    PIE_PID=$!
 
-# Wait for server to accept WebSocket connections
-log "  Waiting for Pie server (port $PIE_PORT)..."
-RETRIES=0
-MAX_RETRIES=120  # 2 minutes (model loading can be slow)
-while ! uv run python -c "
+    log "  Waiting for Pie server (port $PIE_PORT)..."
+    RETRIES=0
+    while ! uv run python -c "
 import asyncio
 from pie_client import PieClient
 async def check():
@@ -299,25 +316,22 @@ async def check():
     await c.close()
 asyncio.run(check())
 " 2>/dev/null; do
-    RETRIES=$((RETRIES + 1))
-    if [[ $RETRIES -ge $MAX_RETRIES ]]; then
-        die "Pie server failed to start after ${MAX_RETRIES}s"
-    fi
-    if ! kill -0 "$PIE_PID" 2>/dev/null; then
-        die "Pie server process died during startup"
-    fi
-    sleep 1
-done
-ok "Pie server ready (PID $PIE_PID)"
+        RETRIES=$((RETRIES + 1))
+        if [[ $RETRIES -ge $MAX_RETRIES ]]; then
+            die "Pie server failed to start after ${MAX_RETRIES}s"
+        fi
+        if ! kill -0 "$PIE_PID" 2>/dev/null; then
+            die "Pie server process died during startup"
+        fi
+        sleep 1
+    done
+    ok "Pie server ready (PID $PIE_PID)"
+fi
 
-# ---------------------------------------------------------------------------
-# Step 5: Optionally start vLLM
-# ---------------------------------------------------------------------------
-
-if [[ "$WITH_VLLM" == true ]]; then
+# --- vLLM ---
+if has_engine vllm; then
     log "${BOLD}Starting vLLM...${NC}"
 
-    # Check if vllm is available
     if ! python -m vllm.entrypoints.openai.api_server --help &>/dev/null 2>&1; then
         die "vLLM not found. Install it in a separate venv:
   python -m venv ~/.venvs/vllm && source ~/.venvs/vllm/bin/activate && pip install vllm"
@@ -341,11 +355,8 @@ if [[ "$WITH_VLLM" == true ]]; then
     ok "vLLM ready (PID $VLLM_PID)"
 fi
 
-# ---------------------------------------------------------------------------
-# Step 5b: Optionally start SGLang
-# ---------------------------------------------------------------------------
-
-if [[ "$WITH_SGLANG" == true ]]; then
+# --- SGLang ---
+if has_engine sglang; then
     log "${BOLD}Starting SGLang...${NC}"
 
     if ! python -m sglang.launch_server --help &>/dev/null 2>&1; then
@@ -369,15 +380,6 @@ if [[ "$WITH_SGLANG" == true ]]; then
         sleep 1
     done
     ok "SGLang ready (PID $SGLANG_PID)"
-fi
-
-# Build engines flag
-ENGINES_FLAG="pie"
-if [[ "$WITH_VLLM" == true ]]; then
-    ENGINES_FLAG="${ENGINES_FLAG},vllm"
-fi
-if [[ "$WITH_SGLANG" == true ]]; then
-    ENGINES_FLAG="${ENGINES_FLAG},sglang"
 fi
 
 # ---------------------------------------------------------------------------
@@ -406,9 +408,7 @@ EVAL_CMD=(
 )
 
 # Override engines in config to match what we started
-if [[ -n "$ENGINES_FLAG" ]]; then
-    EVAL_CMD+=(--engines "$ENGINES_FLAG")
-fi
+EVAL_CMD+=(--engines "$ENGINES")
 
 if [[ -n "$DATASETS" ]]; then
     EVAL_CMD+=(--datasets "$DATASETS")
