@@ -53,7 +53,7 @@ name = "math500"
 name = "mmlu"
 
 [[dataset]]
-name = "aime_2024"
+name = "aime24"
 
 [[dataset]]
-name = "hotpot_qa"
+name = "hotpotqa"
