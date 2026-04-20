@@ -76,6 +76,7 @@ eval = [
     "math_verify",
     "latex2sympy2_extended",
     "lm_eval[math,api]>=0.4",
+    "transformers>=4.40",
 ]
 
 # --- Metal (macOS) ---
