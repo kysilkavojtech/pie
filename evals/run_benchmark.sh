@@ -229,6 +229,12 @@ if [[ "$SKIP_INSTALL" == false ]]; then
 
     export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
     uv sync --extra "$CUDA_EXTRA" --extra eval --quiet 2>&1 | tail -5 || true
+
+    # lm-eval[api] extra needed for vLLM/SGLang (local-completions model)
+    if has_engine vllm || has_engine sglang; then
+        uv pip install --quiet "lm-eval[api]" 2>&1 | tail -3 || true
+    fi
+
     ok "Dependencies installed"
 else
     warn "Skipping dependency install (--skip-install)"
