@@ -379,7 +379,7 @@ if has_engine sglang; then
     if ! "$SGLANG_VENV/bin/python" -m sglang.launch_server --help &>/dev/null 2>&1; then
         log "  SGLang not found — installing into $SGLANG_VENV..."
         python -m venv "$SGLANG_VENV"
-        "$SGLANG_VENV/bin/pip" install --quiet 'sglang[all]'
+        "$SGLANG_VENV/bin/pip" install --quiet 'sglang[all]' ninja
         ok "SGLang installed"
     fi
 
