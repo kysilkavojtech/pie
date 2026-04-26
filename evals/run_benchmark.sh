@@ -271,6 +271,10 @@ if has_engine pie; then
         uv run pie config init
     fi
 
+    # Limit GPU memory so multiple engines can coexist
+    NUM_ENGINES=${#ENGINE_LIST[@]}
+    PIE_GPU_UTIL=$(awk "BEGIN {printf \"%.2f\", 0.80 / $NUM_ENGINES}")
+
     # Generate a local Pie server config inside evals/ so everything is self-contained.
     PIE_SERVE_CONFIG="$PIE_REPO/evals/pie_serve_config.toml"
 
@@ -299,6 +303,7 @@ kv_page_size = 16
 max_batch_tokens = 10240
 max_dist_size = 64
 max_num_embeds = 128
+gpu_mem_utilization = $PIE_GPU_UTIL
 TOML
 
     log "  Config written to evals/pie_serve_config.toml"
