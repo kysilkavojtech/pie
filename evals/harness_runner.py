@@ -13,6 +13,7 @@ Engine/task compatibility:
 
 import httpx
 import lm_eval
+import lm_eval.models  # ensure built-in models (local-completions, etc.) are registered
 
 from .config import EvalConfig, EngineConfig
 from .results import EvalResults, DatasetResult, QuestionResult
@@ -78,13 +79,6 @@ def _build_model_spec(engine_cfg: EngineConfig) -> tuple[str, str]:
         # supports both loglikelihood (MCQ tasks like ARC) and generate_until
         # (math tasks). vLLM and SGLang both expose /v1/completions.
         #
-        # Ensure the model class is registered (entry-point auto-discovery
-        # can fail when running from a different venv or editable install).
-        try:
-            from lm_eval.models.openai_completions import LocalCompletionsAPI  # noqa: F401
-        except ImportError:
-            pass
-
         base_url = engine_cfg.base_url.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url += "/v1"
