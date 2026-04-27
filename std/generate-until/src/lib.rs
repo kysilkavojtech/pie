@@ -12,7 +12,7 @@
 //!   --stop '["Problem:", "\n\n"]'
 //!   → returns generated text (stop string excluded)
 
-use inferlet::stop_condition::{ends_with_any, max_len};
+use inferlet::stop_condition::{StopCondition, ends_with_any, max_len};
 use inferlet::{Args, Result, Sampler};
 
 #[inferlet::main]
