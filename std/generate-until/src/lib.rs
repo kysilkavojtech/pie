@@ -2,8 +2,8 @@
 //!
 //! Generates text from a raw (pre-formatted) prompt, stopping at EOS tokens
 //! or any of the caller-provided stop strings. Unlike text-completion, this
-//! inferlet uses raw prompt filling (no chat template) and tokenizes stop
-//! strings into token-level stop conditions so generation halts immediately.
+//! inferlet uses raw prompt filling (no chat template) and checks stop strings
+//! against decoded text (not token IDs) to avoid tokenizer boundary mismatches.
 //!
 //! Protocol:
 //!   --prompt "raw prompt text"
@@ -12,7 +12,7 @@
 //!   --stop '["Problem:", "\n\n"]'
 //!   → returns generated text (stop string excluded)
 
-use inferlet::stop_condition::{StopCondition, ends_with_any, max_len};
+use inferlet::stop_condition::StopCondition;
 use inferlet::{Args, Result, Sampler};
 
 #[inferlet::main]
@@ -35,23 +35,52 @@ async fn main(mut args: Args) -> Result<String> {
     // Fill raw prompt — lm-eval pre-formats the prompt, no chat template needed
     ctx.fill(&prompt);
 
-    // Build stop conditions: EOS tokens + caller-provided stop strings
-    let mut stop_token_seqs = model.eos_tokens();
-    for s in &stop_strings {
-        let token_ids = tokenizer.tokenize(s);
-        if !token_ids.is_empty() {
-            stop_token_seqs.push(token_ids);
-        }
-    }
-
     let sampler = if temperature == 0.0 {
         Sampler::greedy()
     } else {
         Sampler::top_p(temperature, top_p)
     };
-    let stop_cond = max_len(max_num_outputs).or(ends_with_any(stop_token_seqs));
 
-    let mut output = ctx.generate(sampler, stop_cond).await;
+    // Build EOS token stop condition
+    let eos_stop = inferlet::stop_condition::ends_with_any(model.eos_tokens());
+
+    // Manual decode loop: check stop strings on decoded text to avoid
+    // tokenizer boundary mismatches (e.g. "Problem:" tokenized differently
+    // as a standalone string vs mid-generation after a newline).
+    let mut generated_token_ids = Vec::new();
+
+    loop {
+        let next_token_id = ctx.decode_step(&sampler).await;
+        ctx.fill_token(next_token_id);
+        generated_token_ids.push(next_token_id);
+
+        // Check EOS tokens (token-level is fine for these)
+        if eos_stop.check(&generated_token_ids) {
+            break;
+        }
+
+        // Check max length
+        if generated_token_ids.len() >= max_num_outputs {
+            break;
+        }
+
+        // Check stop strings on decoded text
+        if !stop_strings.is_empty() {
+            let text = tokenizer.detokenize(&generated_token_ids);
+            let mut found_stop = false;
+            for s in &stop_strings {
+                if text.ends_with(s) {
+                    found_stop = true;
+                    break;
+                }
+            }
+            if found_stop {
+                break;
+            }
+        }
+    }
+
+    let mut output = tokenizer.detokenize(&generated_token_ids);
 
     // Trim the stop string from the output if present
     for s in &stop_strings {
