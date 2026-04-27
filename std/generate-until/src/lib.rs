@@ -64,12 +64,15 @@ async fn main(mut args: Args) -> Result<String> {
             break;
         }
 
-        // Check stop strings on decoded text
+        // Check stop strings on decoded text.
+        // We check `contains` on the tail rather than `ends_with` because BPE
+        // may merge the stop string with subsequent characters into one token
+        // (e.g. "Problem:\n" as a single token), so ends_with("Problem:") would miss it.
         if !stop_strings.is_empty() {
             let text = tokenizer.detokenize(&generated_token_ids);
             let mut found_stop = false;
             for s in &stop_strings {
-                if text.ends_with(s) {
+                if text.contains(s.as_str()) {
                     found_stop = true;
                     break;
                 }
@@ -82,13 +85,18 @@ async fn main(mut args: Args) -> Result<String> {
 
     let mut output = tokenizer.detokenize(&generated_token_ids);
 
-    // Trim the stop string from the output if present
+    // Trim everything from the first occurrence of any stop string.
+    // Because BPE can merge stop string + trailing chars into one token,
+    // the stop string may not be at the very end of the output.
+    let mut earliest_pos = output.len();
     for s in &stop_strings {
-        if output.ends_with(s) {
-            output.truncate(output.len() - s.len());
-            break;
+        if let Some(pos) = output.find(s.as_str()) {
+            if pos < earliest_pos {
+                earliest_pos = pos;
+            }
         }
     }
+    output.truncate(earliest_pos);
 
     Ok(output)
 }
