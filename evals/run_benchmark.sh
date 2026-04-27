@@ -198,6 +198,10 @@ if has_engine pie; then
         cargo build --target wasm32-wasip2 --release \
             --manifest-path "$PIE_REPO/std/loglikelihood/Cargo.toml" --quiet
 
+        log "  generate-until..."
+        cargo build --target wasm32-wasip2 --release \
+            --manifest-path "$PIE_REPO/std/generate-until/Cargo.toml" --quiet
+
         ok "Inferlets built"
     else
         warn "Skipping inferlet builds (--skip-build)"
@@ -206,8 +210,10 @@ if has_engine pie; then
     # Verify WASM files exist
     TC_WASM="$PIE_REPO/std/text-completion/target/wasm32-wasip2/release/text_completion.wasm"
     LL_WASM="$PIE_REPO/std/loglikelihood/target/wasm32-wasip2/release/loglikelihood.wasm"
+    GU_WASM="$PIE_REPO/std/generate-until/target/wasm32-wasip2/release/generate_until.wasm"
     [[ -f "$TC_WASM" ]] || die "text-completion WASM not found at $TC_WASM — run without --skip-build"
     [[ -f "$LL_WASM" ]] || die "loglikelihood WASM not found at $LL_WASM — run without --skip-build"
+    [[ -f "$GU_WASM" ]] || die "generate-until WASM not found at $GU_WASM — run without --skip-build"
 else
     log "Skipping inferlet builds (pie not in engine list)"
 fi

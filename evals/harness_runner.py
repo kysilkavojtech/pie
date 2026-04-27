@@ -104,10 +104,6 @@ def _build_model_spec(engine_cfg: EngineConfig) -> tuple[str, str]:
         from .engine import lm_eval_pie as _  # noqa: F401
 
         parts = [f"server={engine_cfg.server}"]
-        if engine_cfg.wasm_path:
-            parts.append(f"wasm_path={engine_cfg.wasm_path}")
-        if engine_cfg.manifest_path:
-            parts.append(f"manifest_path={engine_cfg.manifest_path}")
         return "pie", ",".join(parts)
 
     else:

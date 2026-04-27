@@ -1,0 +1,15 @@
+[package]
+name = "generate-until"
+version = "0.1.0"
+description = "Text generation with stop-string support for lm-eval-harness"
+authors = ["Pie Team"]
+
+[runtime]
+core = "^0.2.0"
+
+[parameters]
+prompt = {type = "string", description = "The raw prompt text (pre-formatted by caller)"}
+max_tokens = {type = "int", optional = true, description = "Maximum number of tokens to generate (default: 256)"}
+temperature = {type = "float", optional = true, description = "Sampling temperature (default: 0.0)"}
+top_p = {type = "float", optional = true, description = "Top-p nucleus sampling threshold (default: 1.0)"}
+stop = {type = "string", optional = true, description = "JSON array of stop strings"}

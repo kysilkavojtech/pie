@@ -4,7 +4,7 @@ Wraps Pie's inferlets as an ``lm_eval.api.model.LM`` subclass so that
 lm-eval-harness can drive inference through Pie.
 
 Supports:
-- ``generate_until`` — via the text-completion inferlet
+- ``generate_until`` — via the generate-until inferlet (raw prompt, stop strings)
 - ``loglikelihood`` — via the loglikelihood inferlet (context forking +
   decode_step_dist for token-level log probabilities)
 """
@@ -25,12 +25,12 @@ from pie_client import PieClient, Event
 # Default paths relative to repo root
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Text-completion inferlet (generate_until)
-_DEFAULT_WASM = (
-    _REPO_ROOT / "std" / "text-completion" / "target"
-    / "wasm32-wasip2" / "release" / "text_completion.wasm"
+# Generate-until inferlet (generate_until tasks)
+_DEFAULT_GU_WASM = (
+    _REPO_ROOT / "std" / "generate-until" / "target"
+    / "wasm32-wasip2" / "release" / "generate_until.wasm"
 )
-_DEFAULT_MANIFEST = _REPO_ROOT / "std" / "text-completion" / "Pie.toml"
+_DEFAULT_GU_MANIFEST = _REPO_ROOT / "std" / "generate-until" / "Pie.toml"
 
 # Loglikelihood inferlet
 _DEFAULT_LL_WASM = (
@@ -65,7 +65,7 @@ def _install_inferlet(loop, client, wasm, manifest, label):
 class PieLM(LM):
     """lm-eval model backed by a running Pie server.
 
-    Uses the text-completion inferlet for generation and the loglikelihood
+    Uses the generate-until inferlet for generation and the loglikelihood
     inferlet for scoring continuations. Instantiated by lm-eval via
     ``model_args`` string, e.g.::
 
@@ -75,8 +75,6 @@ class PieLM(LM):
     def __init__(
         self,
         server: str = "ws://127.0.0.1:8080",
-        wasm_path: str | None = None,
-        manifest_path: str | None = None,
         num_concurrent: int = 4,
         max_gen_toks: int = 8192,
         batch_size: int | str = 1,
@@ -84,15 +82,13 @@ class PieLM(LM):
     ):
         super().__init__()
         self.server = server
-        self.wasm = Path(wasm_path) if wasm_path else _DEFAULT_WASM
-        self.manifest = Path(manifest_path) if manifest_path else _DEFAULT_MANIFEST
         self.num_concurrent = int(num_concurrent)
         self._max_gen_toks = int(max_gen_toks)
         self._batch_size = batch_size
 
         # Will be set during _setup()
         self._client: PieClient | None = None
-        self._inferlet_name: str | None = None
+        self._gu_inferlet_name: str | None = None
         self._ll_inferlet_name: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -106,9 +102,9 @@ class PieLM(LM):
         self._loop.run_until_complete(self._client.connect())
         self._loop.run_until_complete(self._client.authenticate("eval-user"))
 
-        # Install text-completion (generate_until)
-        self._inferlet_name = _install_inferlet(
-            self._loop, self._client, self.wasm, self.manifest, "text-completion"
+        # Install generate-until (generate_until tasks)
+        self._gu_inferlet_name = _install_inferlet(
+            self._loop, self._client, _DEFAULT_GU_WASM, _DEFAULT_GU_MANIFEST, "generate-until"
         )
 
         # Install loglikelihood
@@ -140,7 +136,7 @@ class PieLM(LM):
         return output
 
     # ------------------------------------------------------------------
-    # generate_until — text-completion inferlet
+    # generate_until — generate-until inferlet
     # ------------------------------------------------------------------
 
     async def _generate_one(
@@ -151,16 +147,10 @@ class PieLM(LM):
             "--prompt", prompt,
             "--max-tokens", str(max_tokens),
             "--temperature", str(temperature),
-            "--system", "You are a helpful assistant.",
         ]
-        output = await self._run_inferlet(self._inferlet_name, args)
-
-        # Apply stop sequences (truncate at first match)
-        for s in stop:
-            idx = output.find(s)
-            if idx >= 0:
-                output = output[:idx]
-        return output
+        if stop:
+            args.extend(["--stop", json.dumps(stop)])
+        return await self._run_inferlet(self._gu_inferlet_name, args)
 
     async def _generate_batch(self, requests) -> list[str]:
         """Run multiple generation requests concurrently."""

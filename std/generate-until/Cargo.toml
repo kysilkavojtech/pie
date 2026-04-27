@@ -1,0 +1,15 @@
+[package]
+name = "generate-until"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+inferlet = { path = "../../sdk/rust/inferlet" }
+inferlet-macros = { path = "../../sdk/rust/inferlet-macros" }
+serde_json = "1"
+
+[profile.release]
+lto = true
